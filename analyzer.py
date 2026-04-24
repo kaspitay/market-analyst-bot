@@ -121,8 +121,10 @@ def fetch_technicals(ticker):
         )
         result = data["chart"]["result"][0]
         meta = result["meta"]
-        closes = result["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
+        timestamps = result.get("timestamp", [])
+        quotes = result["indicators"]["quote"][0]
+        raw_closes = quotes["close"]
+        closes = [c for c in raw_closes if c is not None]
 
         current = meta["regularMarketPrice"]
         prev_close = meta["chartPreviousClose"]
@@ -131,6 +133,10 @@ def fetch_technicals(ticker):
         rsi = compute_rsi(closes)
         sma50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
         sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
+
+        # 52-week high/low
+        high_52w = round(max(closes[-252:]), 2) if closes else None
+        low_52w = round(min(closes[-252:]), 2) if closes else None
 
         # Price vs SMAs
         signals = []
@@ -148,13 +154,32 @@ def fetch_technicals(ticker):
             else:
                 signals.append("death cross")
 
+        # RSI signal
+        if rsi and rsi > 70:
+            signals.append("overbought")
+        elif rsi and rsi < 30:
+            signals.append("oversold")
+
+        # 3-month price history for charts (last ~63 trading days)
+        chart_data = []
+        for i in range(max(0, len(timestamps) - 63), len(timestamps)):
+            if i < len(raw_closes) and raw_closes[i] is not None:
+                chart_data.append({
+                    "t": timestamps[i],
+                    "c": round(raw_closes[i], 2),
+                })
+
         return {
             "price": current,
+            "prev_close": prev_close,
             "change_pct": change_pct,
             "rsi": rsi,
             "sma50": sma50,
             "sma200": sma200,
+            "high_52w": high_52w,
+            "low_52w": low_52w,
             "signals": signals,
+            "chart": chart_data,
         }
     except Exception as e:
         print(f"Warning: failed to fetch technicals for {ticker}: {e}")
@@ -370,19 +395,67 @@ def send_telegram(text, bot_token, chat_id):
             chunks.append(chunk)
 
     for i, chunk in enumerate(chunks):
-        result = subprocess.run(
-            ["curl", "-s", "-X", "POST",
-             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-             "-d", f"chat_id={chat_id}",
-             "-d", "parse_mode=HTML",
-             "--data-urlencode", f"text={chunk}"],
-            capture_output=True, text=True, timeout=15,
-        )
-        resp = json.loads(result.stdout)
-        if not resp.get("ok"):
-            raise RuntimeError(f"Telegram error: {resp}")
+        # Try HTML first, fall back to plain text
+        for mode in ["HTML", None]:
+            args = ["curl", "-s", "-X", "POST",
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    "-d", f"chat_id={chat_id}",
+                    "--data-urlencode", f"text={chunk}"]
+            if mode:
+                args += ["-d", f"parse_mode={mode}"]
+            result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            resp = json.loads(result.stdout)
+            if resp.get("ok"):
+                break
+            if mode is None:
+                raise RuntimeError(f"Telegram error: {resp}")
+            print(f"Warning: HTML parse failed, sending as plain text")
         if i < len(chunks) - 1:
             time.sleep(0.5)
+
+
+def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings):
+    """Save all market data as JSON for the dashboard."""
+    data_dir = os.path.join(os.path.dirname(__file__), "docs", "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    # Build per-ticker data
+    tickers_data = {}
+    for ticker, alloc in portfolio.items():
+        tech = technicals.get(ticker)
+        news = portfolio_news.get(ticker, [])
+        ticker_earnings = [e for e in earnings if e["symbol"] == ticker]
+        tickers_data[ticker] = {
+            "type": "portfolio",
+            "allocation": alloc,
+            "technicals": tech,
+            "news": news,
+            "earnings": ticker_earnings,
+        }
+
+    for ticker in watchlist:
+        tech = technicals.get(ticker)
+        news = watchlist_news.get(ticker, [])
+        ticker_earnings = [e for e in earnings if e["symbol"] == ticker]
+        tickers_data[ticker] = {
+            "type": "watchlist",
+            "allocation": None,
+            "technicals": tech,
+            "news": news,
+            "earnings": ticker_earnings,
+        }
+
+    market_data = {
+        "updated": datetime.now(tz=__import__('datetime').timezone.utc).isoformat(),
+        "indicators": indicators,
+        "earnings": earnings,
+        "tickers": tickers_data,
+    }
+
+    filepath = os.path.join(data_dir, "market-data.json")
+    with open(filepath, "w") as f:
+        json.dump(market_data, f, separators=(",", ":"))
+    print(f"Market data saved ({filepath})")
 
 
 def save_briefing_history(briefing_type, content):
@@ -457,7 +530,8 @@ def main():
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")
 
-    # Save briefing history for dashboard
+    # Save data for dashboard
+    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
     save_briefing_history(briefing_type, analysis)
 
 
