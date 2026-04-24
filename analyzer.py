@@ -773,19 +773,21 @@ def send_telegram(text, bot_token, chat_id):
     # Sanitize HTML to prevent parse failures
     text = sanitize_telegram_html(text)
 
-    # Split into chunks if too long for single Telegram message (4096 char limit)
+    # Split into chunks at section boundaries to keep HTML tags balanced
     chunks = []
     if len(text) <= 4000:
         chunks = [text]
     else:
-        lines = text.split("\n")
+        import re
+        # Split on section headers (lines starting with <b>), keeping the delimiter
+        sections = re.split(r'\n\n(?=<b>)', text)
         chunk = ""
-        for line in lines:
-            if len(chunk) + len(line) + 1 > 4000 and chunk:
+        for section in sections:
+            if chunk and len(chunk) + len(section) + 2 > 4000:
                 chunks.append(chunk)
-                chunk = line
+                chunk = section
             else:
-                chunk = chunk + "\n" + line if chunk else line
+                chunk = chunk + "\n\n" + section if chunk else section
         if chunk:
             chunks.append(chunk)
 
