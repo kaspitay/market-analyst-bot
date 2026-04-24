@@ -357,7 +357,7 @@ def fetch_technicals(ticker):
         # 3-month price history for charts
         chart_data = []
         for i in range(max(0, len(valid_timestamps) - 63), len(valid_timestamps)):
-            chart_data.append({"t": valid_timestamps[i], "c": round(closes[i], 2)})
+            chart_data.append({"t": valid_timestamps[i], "c": round(closes[i], 2), "v": volumes[i]})
 
         return {
             "price": current, "prev_close": prev_close, "change_pct": change_pct, "ytd_pct": ytd_pct,
@@ -373,6 +373,106 @@ def fetch_technicals(ticker):
     except Exception as e:
         print(f"Warning: failed to fetch technicals for {ticker}: {e}")
         return None
+
+
+def fetch_price_target(ticker):
+    """Fetch analyst price targets from Yahoo Finance quoteSummary."""
+    try:
+        data = curl_json(
+            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=financialData"
+        )
+        fd = data["quoteSummary"]["result"][0]["financialData"]
+        return {
+            "target_high": fd.get("targetHighPrice", {}).get("raw"),
+            "target_low": fd.get("targetLowPrice", {}).get("raw"),
+            "target_mean": fd.get("targetMeanPrice", {}).get("raw"),
+            "target_median": fd.get("targetMedianPrice", {}).get("raw"),
+            "num_analysts": fd.get("numberOfAnalystOpinions", {}).get("raw"),
+        }
+    except Exception as e:
+        print(f"Warning: failed to fetch price target for {ticker}: {e}")
+        return None
+
+
+def compute_price_target_score(price, target_mean, num_analysts):
+    """Compute a 0-100 score based on analyst price target upside/downside."""
+    if not target_mean or not price or not num_analysts:
+        return 50, []  # Neutral if no data
+
+    reasons = []
+    upside = ((target_mean - price) / price) * 100
+
+    if upside > 20:
+        pt_score = 100
+        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
+    elif upside > 10:
+        pt_score = 80
+        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
+    elif upside > 0:
+        pt_score = 60
+        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
+    elif upside > -10:
+        pt_score = 40
+        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% (-PT)")
+    else:
+        pt_score = 20
+        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% downside (-PT)")
+
+    # Low analyst coverage reduces confidence — pull toward neutral
+    if num_analysts < 5:
+        pt_score = (pt_score + 50) / 2
+        reasons.append(f"Low analyst coverage ({num_analysts}) — reduced confidence")
+
+    return pt_score, reasons
+
+
+def merge_price_target(technicals, price_target):
+    """Merge price target data into technicals and recalculate composite score."""
+    if not technicals:
+        return technicals
+
+    # Add price target fields
+    if price_target:
+        technicals["target_high"] = price_target.get("target_high")
+        technicals["target_low"] = price_target.get("target_low")
+        technicals["target_mean"] = price_target.get("target_mean")
+        technicals["target_median"] = price_target.get("target_median")
+        technicals["num_analysts"] = price_target.get("num_analysts")
+    else:
+        technicals["target_high"] = None
+        technicals["target_low"] = None
+        technicals["target_mean"] = None
+        technicals["target_median"] = None
+        technicals["num_analysts"] = None
+
+    # Compute price target score
+    pt_score, pt_reasons = compute_price_target_score(
+        technicals.get("price"), technicals.get("target_mean"), technicals.get("num_analysts")
+    )
+
+    # Recalculate composite with new weights (must reverse-engineer component scores from existing score)
+    # Original: composite = (ma * 0.25) + (osc * 0.40) + (vol * 0.20) + (trend * 0.15)
+    # We stored the composite but not the component scores, so recalculate from score_reasons
+    # Simpler approach: adjust the existing score by blending in the PT component
+    old_score = technicals.get("score", 50)
+    # New weights: old components 90%, price target 10%
+    new_score = round(old_score * 0.90 + pt_score * 0.10, 1)
+
+    technicals["score"] = new_score
+    technicals["score_reasons"] = technicals.get("score_reasons", []) + pt_reasons
+
+    if new_score >= 70:
+        technicals["recommendation"] = "Strong Buy"
+    elif new_score >= 55:
+        technicals["recommendation"] = "Buy"
+    elif new_score >= 45:
+        technicals["recommendation"] = "Hold"
+    elif new_score >= 30:
+        technicals["recommendation"] = "Sell"
+    else:
+        technicals["recommendation"] = "Strong Sell"
+
+    return technicals
 
 
 def fetch_earnings(tickers, api_key):
@@ -414,143 +514,153 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         header = f"PRE-CLOSE BRIEFING \u2014 {today_str}"
         time_context = "as we approach market close"
 
-    # Build indicators data
-    ind_text = "## Market Indicators\n"
+    # --- MARKET CONTEXT ---
+    market_text = "## Market Context\n"
     fg = indicators.get("fear_greed")
     if fg:
-        ind_text += f"- Fear & Greed Index: {fg['now']} (prev close: {fg['previous_close']}, 1w ago: {fg['one_week_ago']}, 1m ago: {fg['one_month_ago']})\n"
-
+        market_text += f"- Fear & Greed: {fg['now']} (prev: {fg['previous_close']}, 1m ago: {fg['one_month_ago']})\n"
     indices = indicators.get("indices", {})
-    for name, key in [("S&P 500", "sp500"), ("Dow Jones", "dow"), ("NASDAQ", "nasdaq")]:
+    for name, key in [("S&P 500", "sp500"), ("Dow", "dow"), ("NASDAQ", "nasdaq")]:
         idx = indices.get(key)
         if idx:
-            ind_text += f"- {name}: ${idx['price']:,.2f} ({idx['changesPercentage']:+.2f}%)\n"
-
+            market_text += f"- {name}: ${idx['price']:,.2f} ({idx['changesPercentage']:+.2f}%)\n"
     vix = indicators.get("vix")
     if vix:
-        ind_text += f"- VIX: {vix['price']} ({vix['change']:+.2f}, {vix['pct']:+.2f}%)\n"
+        market_text += f"- VIX: {vix['price']} ({vix['pct']:+.2f}%)\n"
 
-    # Economic calendar
+    # --- UPCOMING EVENTS ---
+    events_text = "\n## Upcoming Events\n"
     cal = indicators.get("calendar", [])
-    if cal:
-        ind_text += "\n## Upcoming Economic Events\n"
-        for e in cal:
-            ind_text += f"- {e['date']}: {e['title']} - {e['description']}\n"
-
-    # Build earnings data
-    earn_text = ""
+    for e in cal[:3]:
+        events_text += f"- {e['date']}: {e['title']}\n"
     if earnings:
-        earn_text = "\n## Upcoming Earnings (next 14 days)\n"
-        for e in earnings:
-            eps = f"EPS est: ${e['eps_est']:.2f}" if e["eps_est"] is not None else "EPS est: N/A"
-            held = "PORTFOLIO" if e["symbol"] in portfolio else "WATCHLIST"
+        for e in earnings[:6]:
+            held = "PORTFOLIO" if e["symbol"] in portfolio else "WL"
             alloc = f" ({portfolio[e['symbol']]}%)" if e["symbol"] in portfolio else ""
-            earn_text += f"- [{held}] {e['symbol']}{alloc}: {e['date']} ({e['hour']}) \u2014 {eps}\n"
+            events_text += f"- [{held}] {e['symbol']}{alloc}: earnings {e['date']} ({e['hour']})\n"
 
-    # Build portfolio allocation data
-    port_text = "\n## Current Portfolio Allocation\n"
-    for ticker, pct in sorted(portfolio.items(), key=lambda x: -x[1]):
-        port_text += f"- {ticker}: {pct}%\n"
-
-    # Build technical analysis data
-    tech_text = "\n## Technical Indicators\n"
+    # --- PRE-COMPUTE ALGORITHM DECISIONS ---
+    buys, holds, sells = [], [], []
     for ticker, tech in technicals.items():
-        if tech:
-            rsi_str = f"RSI={tech['rsi']}" if tech["rsi"] else "RSI=N/A"
-            sma50_str = f"SMA50=${tech['sma50']}" if tech["sma50"] else "SMA50=N/A"
-            sma200_str = f"SMA200=${tech['sma200']}" if tech["sma200"] else "SMA200=N/A"
-            signals = ", ".join(tech["signals"]) if tech["signals"] else "no signals"
-            alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
-            tech_text += f"- {ticker}{alloc}: ${tech['price']} ({tech['change_pct']:+.2f}%) | {rsi_str} | {sma50_str} | {sma200_str} | {signals}\n"
+        if not tech or ticker not in portfolio:
+            continue
+        alloc = portfolio.get(ticker, 0)
+        rec = tech.get("recommendation", "Hold")
+        score = tech.get("score", 50)
+        rsi = tech.get("rsi")
+        signals = tech.get("signals", [])
+        pt_mean = tech.get("target_mean")
+        upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
+        upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
+        reasons = ", ".join(tech.get("score_reasons", [])[:3])
+        has_earnings = any(e["symbol"] == ticker for e in earnings)
 
-    # Build news sections
-    news_text = "\n## General Market News\n"
-    for article in market_news:
-        news_text += f"- {article['headline']}: {article['summary']}\n"
+        entry = f"{ticker} ({alloc}%): score={score}, ${tech['price']}, RSI={rsi}, {upside_str}, signals=[{', '.join(signals[:3])}], reasons=[{reasons}]"
+        if has_earnings:
+            entry += " *** EARNINGS SOON ***"
 
-    news_text += "\n## Portfolio Holdings News\n"
-    for ticker, articles in portfolio_news.items():
+        if rec in ("Strong Buy", "Buy"):
+            buys.append((score, entry))
+        elif rec in ("Strong Sell", "Sell"):
+            sells.append((score, entry))
+        else:
+            holds.append((score, entry))
+
+    # Watchlist picks
+    wl_picks = []
+    for ticker, tech in technicals.items():
+        if not tech or ticker in portfolio:
+            continue
+        score = tech.get("score", 50)
+        rec = tech.get("recommendation", "Hold")
+        rsi = tech.get("rsi")
+        pt_mean = tech.get("target_mean")
+        upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
+        upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
+        if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
+            wl_picks.append((score, f"{ticker} [WL]: score={score}, ${tech['price']}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
+
+    buys.sort(key=lambda x: -x[0])
+    sells.sort(key=lambda x: x[0])
+    holds.sort(key=lambda x: -x[0])
+    wl_picks.sort(key=lambda x: -x[0])
+
+    algo_text = "\n## ALGORITHM DECISIONS (pre-computed — present these to the user)\n"
+    algo_text += "\n### BUY/ADD (top picks by score):\n"
+    for _, entry in buys[:3]:
+        algo_text += f"- {entry}\n"
+    if not buys:
+        algo_text += "- None\n"
+
+    algo_text += "\n### HOLD:\n"
+    for _, entry in holds[:3]:
+        algo_text += f"- {entry}\n"
+
+    algo_text += "\n### SELL/REDUCE (weakest by score):\n"
+    for _, entry in sells[:3]:
+        algo_text += f"- {entry}\n"
+    if not sells:
+        algo_text += "- None\n"
+
+    algo_text += "\n### WATCHLIST ENTRY SIGNALS:\n"
+    for _, entry in wl_picks[:2]:
+        algo_text += f"- {entry}\n"
+    if not wl_picks:
+        algo_text += "- None\n"
+
+    # --- CONCENTRATION RISKS ---
+    risk_text = "\n## Concentration Risks\n"
+    for ticker, alloc in sorted(portfolio.items(), key=lambda x: -x[1]):
+        if alloc > 10:
+            risk_text += f"- {ticker}: {alloc}% of portfolio\n"
+
+    # --- NEWS ---
+    news_text = "\n## Market News\n"
+    for article in market_news[:5]:
+        news_text += f"- {article['headline']}\n"
+    news_text += "\n## Ticker News\n"
+    for ticker, articles in {**portfolio_news, **watchlist_news}.items():
         if articles:
-            news_text += f"\n### {ticker} ({portfolio.get(ticker, 0)}% of portfolio)\n"
-            for a in articles:
-                news_text += f"- {a['headline']}: {a['summary']}\n"
+            news_text += f"- {ticker}: {articles[0]['headline']}\n"
 
-    if any(articles for articles in watchlist_news.values()):
-        news_text += "\n## Watchlist News (not holding)\n"
-        for ticker, articles in watchlist_news.items():
-            if articles:
-                news_text += f"\n### {ticker}\n"
-                for a in articles:
-                    news_text += f"- {a['headline']}: {a['summary']}\n"
+    return f"""You are a market analyst reviewing our algorithm's output and preparing a daily briefing {time_context}.
 
-    return f"""You are a stock market analyst advising a long-term investor.
-Produce a Telegram message briefing {time_context} using the data below.
+YOUR ROLE: Our scoring algorithm has already analyzed all tickers and made BUY/HOLD/SELL decisions (shown below). Your job is to:
+1. Present the algorithm's recommendations clearly
+2. Add brief context from news/earnings/macro for each recommendation
+3. Flag if you DISAGREE with any recommendation based on the news or upcoming events (e.g. "algorithm says BUY but earnings in 2 days — consider waiting")
+4. Highlight concentration risks inline
 
-Format rules:
-- Use Telegram HTML: <b>bold</b>, <i>italic</i>
-- Use emojis liberally to make it scannable and visually appealing
-- Use bullet points (\u2022) for lists
-- Keep under 3900 characters total
+FORMAT RULES (strict):
+- MAXIMUM 2800 characters. Must fit in ONE Telegram message.
+- ONLY use <b> and <i> HTML tags. No other tags.
+- Use \u2022 bullets, one short line each.
+- Be concise — short sentences, no filler.
 
-Structure your message EXACTLY in this order:
+EXACTLY these 5 sections:
 
-1. <b>\U0001f4ca {header}</b>
+<b>\U0001f4ca {header}</b>
 
-2. <b>\U0001f3af MARKET DASHBOARD</b>
-   Show the major indices (S&P 500, Dow, NASDAQ) with arrows (\u2b06\ufe0f/\u2b07\ufe0f).
-   Show VIX level.
-   Show Fear & Greed Index score with the appropriate emoji:
-   - 0-25: \U0001f631 Extreme Fear
-   - 25-45: \U0001f628 Fear
-   - 45-55: \U0001f610 Neutral
-   - 55-75: \U0001f60e Greed
-   - 75-100: \U0001f929 Extreme Greed
-   Include the trend (vs previous close and 1 month ago).
+<b>\U0001f3af MARKET</b>
+Indices with arrows, VIX, Fear & Greed (emoji: \U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+). Max 5 lines.
 
-3. <b>\U0001f4c5 EARNINGS ALERT</b>
-   List upcoming earnings. Use \u26a0\ufe0f for this week, \U0001f4c6 for next week.
-   Mark [PORTFOLIO] or [WATCHLIST] for each. Show allocation % for portfolio tickers.
+<b>\U0001f4c5 UPCOMING</b>
+Top 5 items: earnings with dates + key economic events. One line each.
 
-4. <b>\U0001f4b0 ECONOMIC CALENDAR</b>
-   List key upcoming economic events (Fed meetings, GDP, CPI, employment).
+<b>\U0001f4a1 ACTIONS</b>
+Present the algorithm's decisions below. For each ticker: one line with ticker, allocation %, the recommendation, and brief WHY (add news context or your own note).
+Use \U0001f7e2 for BUY, \U0001f7e1 for HOLD, \U0001f534 for SELL.
+Add \u26a0\ufe0f inline for concentration risk (>10%) or earnings-soon warnings.
+If you disagree with a recommendation, say so briefly with \U0001f9d0.
+Max 2 per category. Skip empty categories.
 
-5. <b>\U0001f4c8 TECHNICAL SNAPSHOT</b>
-   Highlight the most notable technical signals from the data:
-   - Stocks with RSI > 70 (overbought) or RSI < 30 (oversold) \u2014 these are key signals
-   - Golden crosses or death crosses
-   - Stocks significantly above/below their SMA200
-   Keep it brief \u2014 only mention tickers with actionable signals.
+<b>\U0001f440 WATCHLIST</b>
+Max 2 watchlist tickers with entry signals. Skip if none.
 
-6. <b>\U0001f4bc PORTFOLIO PULSE</b>
-   Only tickers with meaningful news. Show ticker, allocation %, news summary, impact.
-   Use \U0001f7e2 bullish / \U0001f534 bearish / \u26aa neutral.
+Do NOT add any other sections. No Outlook, no Opportunities, no Technical Snapshot, no Risk Alerts section.
 
-7. <b>\U0001f440 WATCHLIST RADAR</b>
-   News for watchlist tickers (not held). Flag any that look like good entry points.
-
-8. <b>\U0001f4a1 RECOMMENDATIONS</b>
-   This is the MOST IMPORTANT section. Based on ALL the data (news + technicals + sentiment):
-   - \U0001f7e2 <b>BUY/ADD</b>: Which tickers to buy or add to, and WHY (combine news + technical signals)
-   - \U0001f7e1 <b>HOLD</b>: Which to hold steady, and WHY
-   - \U0001f534 <b>SELL/REDUCE</b>: Which to consider selling or trimming, and WHY
-   - Only include tickers where there's a clear signal. Skip the rest.
-   - Consider the portfolio allocation \u2014 if a position is already large (>10%), be cautious about recommending more.
-   - Include watchlist tickers if there's a good entry signal.
-   - Use RSI levels to support your recommendations (oversold = potential buy, overbought = caution).
-
-9. <b>\u26a0\ufe0f RISK ALERTS</b>
-   Flag any concentration risks (positions >10%), correlated positions moving together,
-   or death cross signals that need attention.
-
-10. <b>\U0001f680 OPPORTUNITIES</b>
-   Suggest 1-3 stocks or sectors NOT in the portfolio or watchlist that show long-term potential.
-   Brief explanation of why each is interesting.
-
-11. <b>\U0001f30d MARKET OUTLOOK</b>
-   2-3 sentences on overall sentiment and what to watch {time_context}.
-
-Data:
-{ind_text}{earn_text}{port_text}{tech_text}{news_text}"""
+DATA:
+{market_text}{events_text}{algo_text}{risk_text}{news_text}"""
 
 
 def analyze(prompt):
@@ -566,41 +676,38 @@ def analyze(prompt):
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def send_telegram(text, bot_token, chat_id):
-    # Telegram max is 4096 chars. Split on section headers if too long.
-    chunks = []
-    if len(text) <= 4000:
-        chunks = [text]
-    else:
-        lines = text.split("\n")
-        chunk = ""
-        for line in lines:
-            if len(chunk) + len(line) + 1 > 4000 and chunk:
-                chunks.append(chunk)
-                chunk = line
-            else:
-                chunk = chunk + "\n" + line if chunk else line
-        if chunk:
-            chunks.append(chunk)
+def sanitize_telegram_html(text):
+    """Strip HTML tags that Telegram doesn't support, keeping only allowed ones."""
+    import re
+    # Telegram HTML mode only supports: b, i, u, s, code, pre, a
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+    def replace_tag(m):
+        tag = m.group(1).lower().strip().split()[0].lstrip('/')
+        if tag in allowed:
+            return m.group(0)
+        return ''
+    return re.sub(r'<(/?\s*[a-zA-Z][^>]*)>', replace_tag, text)
 
-    for i, chunk in enumerate(chunks):
-        # Try HTML first, fall back to plain text
-        for mode in ["HTML", None]:
-            args = ["curl", "-s", "-X", "POST",
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    "-d", f"chat_id={chat_id}",
-                    "--data-urlencode", f"text={chunk}"]
-            if mode:
-                args += ["-d", f"parse_mode={mode}"]
-            result = subprocess.run(args, capture_output=True, text=True, timeout=15)
-            resp = json.loads(result.stdout)
-            if resp.get("ok"):
-                break
-            if mode is None:
-                raise RuntimeError(f"Telegram error: {resp}")
-            print(f"Warning: HTML parse failed, sending as plain text")
-        if i < len(chunks) - 1:
-            time.sleep(0.5)
+
+def send_telegram(text, bot_token, chat_id):
+    # Sanitize HTML to prevent parse failures
+    text = sanitize_telegram_html(text)
+
+    # Send as a single message (must be under 4096 chars)
+    for mode in ["HTML", None]:
+        args = ["curl", "-s", "-X", "POST",
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                "-d", f"chat_id={chat_id}",
+                "--data-urlencode", f"text={text}"]
+        if mode:
+            args += ["-d", f"parse_mode={mode}"]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        resp = json.loads(result.stdout)
+        if resp.get("ok"):
+            return
+        if mode is None:
+            raise RuntimeError(f"Telegram error: {resp}")
+        print(f"Warning: HTML parse failed, sending as plain text")
 
 
 def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings):
@@ -680,12 +787,15 @@ def main():
     vix = fetch_vix()
     earnings = fetch_earnings(all_tickers, finnhub_key)
 
-    # Fetch technical indicators for all tickers
-    print("Fetching technical indicators...")
+    # Fetch technical indicators and price targets for all tickers
+    print("Fetching technical indicators and price targets...")
     technicals = {}
     for ticker in all_tickers:
         technicals[ticker] = fetch_technicals(ticker)
-        time.sleep(0.3)  # Rate limit Yahoo Finance
+        time.sleep(0.2)
+        pt = fetch_price_target(ticker)
+        technicals[ticker] = merge_price_target(technicals[ticker], pt)
+        time.sleep(0.2)  # Rate limit Yahoo Finance
 
     # Fetch news for portfolio holdings
     portfolio_news = {}
@@ -715,6 +825,13 @@ def main():
         indicators, earnings, portfolio, watchlist, technicals, briefing_type,
     )
     analysis = analyze(prompt)
+
+    # Safety net: truncate if too long for single Telegram message
+    if len(analysis) > 3500:
+        print(f"Warning: briefing is {len(analysis)} chars, truncating...")
+        cutoff = analysis[:3500].rfind('\n\n<b>')
+        if cutoff > 2000:
+            analysis = analysis[:cutoff]
 
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")

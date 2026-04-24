@@ -15,7 +15,8 @@
     .grid { display: grid; gap: 16px; }
     .grid-4 { grid-template-columns: repeat(4, 1fr); }
     .grid-2 { grid-template-columns: 1fr 1fr; }
-    .card { background: #1a1a2e; border-radius: 10px; padding: 20px; border: 1px solid #2a2a4a; }
+    .card { background: linear-gradient(135deg, #1a1a2e 0%, #1e1e35 100%); border-radius: 10px; padding: 20px; border: 1px solid #2a2a4a; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: transform 0.2s, box-shadow 0.2s; }
+    .card:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
     .card h2 { font-size: 15px; color: #888; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
     .market-card { text-align: center; }
     .market-card .label { font-size: 12px; color: #888; margin-bottom: 4px; }
@@ -24,22 +25,28 @@
     .green { color: #00c853; }
     .red { color: #ff1744; }
     .neutral { color: #888; }
-    .gauge-container { display: flex; align-items: center; gap: 20px; }
-    .gauge-info { flex: 1; }
-    .gauge-score { font-size: 48px; font-weight: 700; }
-    .gauge-label { font-size: 18px; margin-top: 4px; }
-    .gauge-history { margin-top: 12px; font-size: 13px; color: #888; }
-    .gauge-history span { display: block; margin-top: 4px; }
+    .fg-card { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .gauge-wrapper { position: relative; width: 220px; height: 130px; margin: 0 auto; }
+    .gauge-wrapper canvas { width: 100% !important; height: 100% !important; }
+    .gauge-center { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); text-align: center; }
+    .gauge-score { font-size: 42px; font-weight: 700; line-height: 1; }
+    .gauge-label { font-size: 14px; font-weight: 600; margin-top: 2px; }
+    .gauge-scale { display: flex; justify-content: space-between; width: 220px; margin: 0 auto; font-size: 10px; color: #555; }
+    .gauge-history { display: flex; justify-content: center; gap: 16px; margin-top: 12px; font-size: 12px; color: #888; flex-wrap: wrap; }
+    .gauge-history span { white-space: nowrap; }
+    .no-hover:hover { transform: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 10px 8px; color: #888; border-bottom: 1px solid #2a2a4a; cursor: pointer; user-select: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    th { text-align: left; padding: 10px 8px; color: #888; border-bottom: 1px solid #2a2a4a; cursor: pointer; user-select: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; background: #1a1a2e; z-index: 10; }
     th:hover { color: #fff; }
     th .help { cursor: help; color: #e94560; font-size: 10px; vertical-align: super; }
+    th .sort-arrow { font-size: 9px; margin-left: 3px; color: #e94560; }
     td { padding: 10px 8px; border-bottom: 1px solid #1f1f3a; }
-    tr.clickable { cursor: pointer; }
+    tr.clickable { cursor: pointer; transition: background 0.15s; }
     tr.clickable:hover { background: #22224a; }
-    .detail-row { display: none; }
-    .detail-row.open { display: table-row; }
-    .detail-row td { padding: 16px; background: #12122a; }
+    tr.clickable:nth-child(4n+1) { background: #15152a; }
+    tr.clickable:nth-child(4n+1):hover { background: #22224a; }
+    .detail-row td { padding: 0; background: #12122a; border-bottom: none; }
+    .detail-row.open td { padding: 0; border-bottom: 1px solid #1f1f3a; }
     .detail-content { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .detail-chart { height: 200px; }
     .detail-info { font-size: 13px; }
@@ -77,6 +84,18 @@
     .help-toggle { background: none; border: 1px solid #2a2a4a; color: #888; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; }
     .help-toggle:hover { color: #fff; border-color: #e94560; }
     .score-reasons { font-size: 11px; color: #888; margin-top: 4px; }
+    .score-bar { height: 4px; background: #1f1f3a; border-radius: 2px; margin-top: 4px; width: 60px; }
+    .score-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+    .rsi-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .range-bar { margin-top: 8px; }
+    .range-track { height: 6px; background: #1f1f3a; border-radius: 3px; position: relative; margin: 4px 0; }
+    .range-marker { position: absolute; top: -4px; width: 14px; height: 14px; background: #e94560; border-radius: 50%; transform: translateX(-50%); border: 2px solid #0f0f1a; }
+    .range-labels { display: flex; justify-content: space-between; font-size: 11px; color: #666; }
+    .detail-wrapper { max-height: 0; overflow: hidden; transition: max-height 0.35s ease-out, opacity 0.25s ease-out; opacity: 0; }
+    .detail-row.open .detail-wrapper { max-height: 600px; opacity: 1; }
+    .pt-upside { font-weight: 600; }
+    .pt-upside.green { color: #00c853; }
+    .pt-upside.red { color: #ff1744; }
     @media (max-width: 900px) {
       .grid-4 { grid-template-columns: repeat(2, 1fr); }
       .grid-2 { grid-template-columns: 1fr; }
@@ -125,8 +144,11 @@
         <dt>Fear & Greed Index</dt>
         <dd>Market sentiment on a 0-100 scale. <b>0-25</b> = Extreme Fear (investors are very worried — often a buying opportunity). <b>75-100</b> = Extreme Greed (investors are overconfident — often a signal to be cautious).</dd>
 
+        <dt>Analyst Price Target</dt>
+        <dd>Consensus price target from Wall Street analysts. Shows mean target and upside/downside from current price. <b>Green</b> = upside potential. <b>Red</b> = downside risk. Low analyst coverage (&lt;5) reduces confidence.</dd>
+
         <dt>Recommendation (Algorithm-Based)</dt>
-        <dd>A scoring system based purely on technical indicators (no AI). Scores RSI, SMA positions, golden/death cross, and 52W position. Ranges from <b>Strong Buy</b> (+3 or more) to <b>Strong Sell</b> (-3 or less). This is a mechanical signal, not financial advice — always combine with your own research.</dd>
+        <dd>A composite 0-100 score based on 5 components: Moving Averages (22%), Oscillators (36%), Volume (18%), Trend Strength (14%), and Analyst Price Targets (10%). Ranges from <b>Strong Buy</b> (70+) to <b>Strong Sell</b> (&lt;30). This is a mechanical signal, not financial advice — always combine with your own research.</dd>
       </dl>
     </div>
 
@@ -135,18 +157,19 @@
 
     <!-- Fear & Greed + Allocation -->
     <div class="grid grid-2" style="margin-bottom:16px">
-      <div class="card">
+      <div class="card no-hover fg-card">
         <h2>Fear & Greed Index</h2>
-        <div class="gauge-container">
-          <div style="width:180px;height:120px"><canvas id="gauge-chart"></canvas></div>
-          <div class="gauge-info">
+        <div class="gauge-wrapper">
+          <canvas id="gauge-chart"></canvas>
+          <div class="gauge-center">
             <div class="gauge-score" id="fg-score">--</div>
             <div class="gauge-label" id="fg-label">Loading...</div>
-            <div class="gauge-history" id="fg-history"></div>
           </div>
         </div>
+        <div class="gauge-scale"><span>0 — Fear</span><span>Greed — 100</span></div>
+        <div class="gauge-history" id="fg-history"></div>
       </div>
-      <div class="card">
+      <div class="card no-hover">
         <h2>Portfolio Allocation</h2>
         <div class="donut-container"><canvas id="alloc-chart"></canvas></div>
       </div>
@@ -261,16 +284,35 @@ function renderFearGreed() {
   document.getElementById('fg-score').style.color = color;
   document.getElementById('fg-label').textContent = label;
   document.getElementById('fg-label').style.color = color;
-  document.getElementById('fg-history').innerHTML =
-    `<span>Previous close: ${fg.previous_close}</span>` +
-    `<span>1 week ago: ${fg.one_week_ago}</span>` +
-    `<span>1 month ago: ${fg.one_month_ago}</span>`;
 
+  const prevDelta = score - fg.previous_close;
+  const prevArrow = prevDelta > 0 ? '▲' : prevDelta < 0 ? '▼' : '—';
+  const monthDelta = score - fg.one_month_ago;
+  const monthArrow = monthDelta > 0 ? '▲' : monthDelta < 0 ? '▼' : '—';
+  document.getElementById('fg-history').innerHTML =
+    `<span>Prev: ${fg.previous_close} ${prevArrow}</span>` +
+    `<span>1w: ${fg.one_week_ago}</span>` +
+    `<span>1m: ${fg.one_month_ago} ${monthArrow}</span>`;
+
+  // Multi-color gauge arc: red → orange → yellow → green
   const ctx = document.getElementById('gauge-chart').getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 220, 0);
+  gradient.addColorStop(0, '#ff1744');
+  gradient.addColorStop(0.3, '#ff6d00');
+  gradient.addColorStop(0.5, '#ffd600');
+  gradient.addColorStop(0.7, '#76ff03');
+  gradient.addColorStop(1, '#00c853');
+
   new Chart(ctx, {
     type: 'doughnut',
-    data: { datasets: [{ data: [score, 100 - score], backgroundColor: [color, '#1f1f3a'], borderWidth: 0 }] },
-    options: { circumference: 180, rotation: 270, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: false } }, responsive: true, maintainAspectRatio: false }
+    data: { datasets: [
+      { data: [score, 100 - score], backgroundColor: [gradient, '#1f1f3a'], borderWidth: 0 }
+    ]},
+    options: {
+      circumference: 180, rotation: 270, cutout: '70%',
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      responsive: true, maintainAspectRatio: false
+    }
   });
 }
 
@@ -315,10 +357,13 @@ function renderCalendar() {
 }
 
 function signalTag(signal) {
-  const bullish = ['above SMA50', 'above SMA200', 'golden cross', 'oversold'];
-  const bearish = ['below SMA50', 'below SMA200', 'death cross', 'overbought'];
-  const cls = bullish.includes(signal) ? 'signal-bullish' : bearish.includes(signal) ? 'signal-bearish' : 'signal-neutral';
-  return `<span class="signal-tag ${cls}">${signal}</span>`;
+  const bullish = ['above SMA50', 'above SMA200', 'golden cross', 'oversold', 'MACD bullish'];
+  const bearish = ['below SMA50', 'below SMA200', 'death cross', 'overbought', 'MACD bearish'];
+  const isBull = bullish.includes(signal);
+  const isBear = bearish.includes(signal);
+  const cls = isBull ? 'signal-bullish' : isBear ? 'signal-bearish' : 'signal-neutral';
+  const arrow = isBull ? '▲ ' : isBear ? '▼ ' : '';
+  return `<span class="signal-tag ${cls}">${arrow}${signal}</span>`;
 }
 
 function recTag(rec) {
@@ -332,6 +377,28 @@ function rsiColor(rsi) {
   if (rsi > 70) return 'red';
   if (rsi < 30) return 'green';
   return '';
+}
+
+function rsiBadge(rsi) {
+  if (rsi == null) return '<span class="rsi-badge" style="background:#88888822;color:#888">—</span>';
+  let bg, color;
+  if (rsi > 70) { bg = '#ff174422'; color = '#ff1744'; }
+  else if (rsi > 60) { bg = '#ff6d0022'; color = '#ff6d00'; }
+  else if (rsi < 30) { bg = '#00c85322'; color = '#00c853'; }
+  else if (rsi < 40) { bg = '#76ff0322'; color = '#76ff03'; }
+  else { bg = '#88888822'; color = '#aaa'; }
+  return `<span class="rsi-badge" style="background:${bg};color:${color}">${rsi}</span>`;
+}
+
+function scoreColor(score) {
+  if (score >= 55) return '#00c853';
+  if (score >= 30) return '#ffd600';
+  return '#ff1744';
+}
+
+function scoreBar(score) {
+  const s = score || 0;
+  return `<div class="score-bar"><div class="score-fill" style="width:${s}%;background:${scoreColor(s)}"></div></div>`;
 }
 
 function fmtPct(val) {
@@ -380,20 +447,30 @@ function renderTickers() {
       <td>${price}</td>
       <td>${fmtPct(t.change_pct)}</td>
       <td>${fmtPct(t.ytd_pct)}</td>
-      <td class="${rsiColor(t.rsi)}">${rsi}</td>
+      <td>${rsiBadge(t.rsi)}</td>
       <td>${sma50}</td>
       <td>${sma200}</td>
-      <td>${recTag(t.recommendation)}</td>
+      <td>${recTag(t.recommendation)}${scoreBar(t.score)}</td>
       <td>${signals}</td>
     </tr>`;
 
     // Detail row
     const h52 = t.high_52w ? '$' + t.high_52w.toFixed(2) : '—';
     const l52 = t.low_52w ? '$' + t.low_52w.toFixed(2) : '—';
-    const reasons = (t.score_reasons || []).map(r => `<div style="padding:2px 0">• ${r}</div>`).join('');
+    const rangePct = (t.high_52w && t.low_52w && t.high_52w !== t.low_52w) ? ((t.price - t.low_52w) / (t.high_52w - t.low_52w) * 100).toFixed(1) : null;
+    const reasons = (t.score_reasons || []).map(r => `<div style="padding:2px 0">\u2022 ${r}</div>`).join('');
+
+    // Price target data
+    const ptMean = t.target_mean ? '$' + t.target_mean.toFixed(2) : '—';
+    const ptHigh = t.target_high ? '$' + t.target_high.toFixed(2) : '—';
+    const ptLow = t.target_low ? '$' + t.target_low.toFixed(2) : '—';
+    const ptUpside = (t.target_mean && t.price) ? ((t.target_mean - t.price) / t.price * 100) : null;
+    const ptUpsideStr = ptUpside != null ? `(${ptUpside > 0 ? '+' : ''}${ptUpside.toFixed(1)}%)` : '';
+    const ptUpsideCls = ptUpside > 0 ? 'green' : ptUpside < 0 ? 'red' : 'neutral';
 
     html += `<tr class="detail-row" id="detail-${e.ticker}"><td colspan="10">
-      <div class="detail-content">
+      <div class="detail-wrapper" style="padding:0 16px">
+      <div class="detail-content" style="padding:16px 0">
         <div>
           <div class="section-label">3-Month Price Chart</div>
           <div class="detail-chart"><canvas id="chart-${e.ticker}"></canvas></div>
@@ -404,25 +481,38 @@ function renderTickers() {
           <div class="row"><span class="label">Daily Change</span>${fmtPct(t.change_pct)}</div>
           <div class="row"><span class="label">YTD Return</span>${fmtPct(t.ytd_pct)}</div>
           <div class="row"><span class="label">RSI (14-day)</span><span class="${rsiColor(t.rsi)}">${rsi}${t.rsi > 70 ? ' — Overbought' : t.rsi < 30 ? ' — Oversold' : ''}</span></div>
-          <div class="row"><span class="label">SMA 50</span><span>${sma50}${t.sma50 && t.price > t.sma50 ? ' ✓ above' : t.sma50 ? ' ✗ below' : ''}</span></div>
-          <div class="row"><span class="label">SMA 200</span><span>${sma200}${t.sma200 && t.price > t.sma200 ? ' ✓ above' : t.sma200 ? ' ✗ below' : ''}</span></div>
-          <div class="row"><span class="label">52-Week High</span><span>${h52}</span></div>
-          <div class="row"><span class="label">52-Week Low</span><span>${l52}</span></div>
+          <div class="row"><span class="label">SMA 50</span><span>${sma50}${t.sma50 && t.price > t.sma50 ? ' \u2713 above' : t.sma50 ? ' \u2717 below' : ''}</span></div>
+          <div class="row"><span class="label">SMA 200</span><span>${sma200}${t.sma200 && t.price > t.sma200 ? ' \u2713 above' : t.sma200 ? ' \u2717 below' : ''}</span></div>
+          <div class="row"><span class="label">52-Week Range</span><span>${l52} — ${h52}</span></div>
+          ${rangePct !== null ? `<div class="range-bar"><div class="range-track"><div class="range-marker" style="left:${rangePct}%"></div></div><div class="range-labels"><span>${l52}</span><span>${h52}</span></div></div>` : ''}
+          <div class="row"><span class="label">Analyst Target</span><span class="pt-upside ${ptUpsideCls}">${ptMean} ${ptUpsideStr}</span></div>
+          ${t.target_high ? `<div class="row"><span class="label">Target Range</span><span>${ptLow} — ${ptHigh}</span></div>` : ''}
+          ${t.num_analysts ? `<div class="row"><span class="label">Analysts</span><span>${t.num_analysts}</span></div>` : ''}
           <div class="row"><span class="label">Allocation</span><span>${alloc}</span></div>
           ${e.earnings?.length ? `<div class="row"><span class="label">Next Earnings</span><span>${e.earnings[0].date} (${e.earnings[0].hour})</span></div>` : ''}
           <div style="margin-top:12px">
             <div class="section-label">Technical Recommendation</div>
-            <div style="margin-bottom:6px">${recTag(t.recommendation)} <span style="color:#888;font-size:12px">(score: ${t.score || 0})</span></div>
+            <div style="margin-bottom:6px">${recTag(t.recommendation)} <span style="color:#888;font-size:12px">(score: ${t.score || 0}/100)</span></div>
             <div class="score-reasons">${reasons || 'No signals'}</div>
           </div>
           <div style="margin-top:8px"><div class="section-label">Signals</div>${signals || '<span style="color:#555">None</span>'}</div>
           ${e.news?.length ? `<div style="margin-top:8px"><div class="section-label">Recent News</div>${e.news.map(n => `<div class="news-item">${n.headline}</div>`).join('')}</div>` : ''}
         </div>
       </div>
+      </div>
     </td></tr>`;
   });
 
   tbody.innerHTML = html;
+  // Update sort arrows
+  document.querySelectorAll('th .sort-arrow').forEach(el => el.remove());
+  const ths = document.querySelectorAll('thead th');
+  if (ths[sortCol]) {
+    const arrow = document.createElement('span');
+    arrow.className = 'sort-arrow';
+    arrow.textContent = sortAsc ? ' ▲' : ' ▼';
+    ths[sortCol].appendChild(arrow);
+  }
 }
 
 function toggleDetail(ticker) {
@@ -441,17 +531,23 @@ function toggleDetail(ticker) {
       const prices = t.chart.map(p => p.c);
       const datasets = [{
         label: ticker, data: prices, borderColor: '#e94560', backgroundColor: '#e9456015',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
+        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y',
       }];
-      if (t.sma50) datasets.push({ label: 'SMA50', data: Array(prices.length).fill(t.sma50), borderColor: '#2979ff', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
-      if (t.sma200) datasets.push({ label: 'SMA200', data: Array(prices.length).fill(t.sma200), borderColor: '#ffd600', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
+      if (t.sma50) datasets.push({ label: 'SMA50', data: Array(prices.length).fill(t.sma50), borderColor: '#2979ff', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false, yAxisID: 'y' });
+      if (t.sma200) datasets.push({ label: 'SMA200', data: Array(prices.length).fill(t.sma200), borderColor: '#ffd600', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false, yAxisID: 'y' });
+      // Volume bars
+      if (t.chart[0]?.v !== undefined) {
+        const vols = t.chart.map(p => p.v);
+        datasets.push({ label: 'Volume', type: 'bar', data: vols, yAxisID: 'vol', backgroundColor: '#e9456022', borderWidth: 0, barPercentage: 1.0, categoryPercentage: 1.0 });
+      }
       openCharts[ticker] = new Chart(ctx, {
         type: 'line', data: { labels, datasets },
         options: {
           responsive: true, maintainAspectRatio: false,
           scales: {
             x: { ticks: { color: '#555', maxTicksLimit: 6, font: { size: 10 } }, grid: { color: '#1f1f3a' } },
-            y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#1f1f3a' } },
+            y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#1f1f3a' }, position: 'left' },
+            vol: { display: false, position: 'right', grid: { display: false }, beginAtZero: true },
           },
           plugins: { legend: { labels: { color: '#888', font: { size: 11 } } } },
         }
