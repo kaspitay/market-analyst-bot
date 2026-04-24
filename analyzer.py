@@ -160,6 +160,71 @@ def fetch_technicals(ticker):
         elif rsi and rsi < 30:
             signals.append("oversold")
 
+        # YTD calculation — find first close of the year
+        ytd_pct = None
+        current_year = date.today().year
+        for i, ts in enumerate(timestamps):
+            if ts and raw_closes[i] is not None:
+                from datetime import datetime as dt, timezone
+                d = dt.fromtimestamp(ts, tz=timezone.utc)
+                if d.year == current_year:
+                    ytd_start = raw_closes[i]
+                    ytd_pct = round((current - ytd_start) / ytd_start * 100, 2)
+                    break
+
+        # Technical analysis score (-5 to +5 range)
+        score = 0
+        score_reasons = []
+
+        # RSI scoring
+        if rsi:
+            if rsi < 30:
+                score += 2; score_reasons.append("RSI oversold (<30)")
+            elif rsi < 40:
+                score += 1; score_reasons.append("RSI low (30-40)")
+            elif rsi > 70:
+                score -= 2; score_reasons.append("RSI overbought (>70)")
+            elif rsi > 60:
+                score -= 1; score_reasons.append("RSI high (60-70)")
+
+        # SMA scoring
+        if sma50 and current > sma50:
+            score += 1; score_reasons.append("Price above SMA50")
+        elif sma50:
+            score -= 1; score_reasons.append("Price below SMA50")
+
+        if sma200 and current > sma200:
+            score += 1; score_reasons.append("Price above SMA200")
+        elif sma200:
+            score -= 1; score_reasons.append("Price below SMA200")
+
+        # Cross scoring
+        if sma50 and sma200:
+            if sma50 > sma200:
+                score += 1; score_reasons.append("Golden cross (SMA50 > SMA200)")
+            else:
+                score -= 1; score_reasons.append("Death cross (SMA50 < SMA200)")
+
+        # 52W position scoring
+        if high_52w and low_52w and high_52w != low_52w:
+            range_pct = (current - low_52w) / (high_52w - low_52w)
+            if range_pct < 0.2:
+                score += 1; score_reasons.append("Near 52W low (potential value)")
+            elif range_pct > 0.95:
+                score -= 1; score_reasons.append("Near 52W high (stretched)")
+
+        # Map score to recommendation
+        if score >= 3:
+            recommendation = "Strong Buy"
+        elif score >= 1:
+            recommendation = "Buy"
+        elif score == 0:
+            recommendation = "Hold"
+        elif score >= -2:
+            recommendation = "Sell"
+        else:
+            recommendation = "Strong Sell"
+
         # 3-month price history for charts (last ~63 trading days)
         chart_data = []
         for i in range(max(0, len(timestamps) - 63), len(timestamps)):
@@ -173,12 +238,16 @@ def fetch_technicals(ticker):
             "price": current,
             "prev_close": prev_close,
             "change_pct": change_pct,
+            "ytd_pct": ytd_pct,
             "rsi": rsi,
             "sma50": sma50,
             "sma200": sma200,
             "high_52w": high_52w,
             "low_52w": low_52w,
             "signals": signals,
+            "score": score,
+            "recommendation": recommendation,
+            "score_reasons": score_reasons,
             "chart": chart_data,
         }
     except Exception as e:

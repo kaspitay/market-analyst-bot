@@ -31,9 +31,10 @@
     .gauge-history { margin-top: 12px; font-size: 13px; color: #888; }
     .gauge-history span { display: block; margin-top: 4px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 10px 12px; color: #888; border-bottom: 1px solid #2a2a4a; cursor: pointer; user-select: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    th { text-align: left; padding: 10px 8px; color: #888; border-bottom: 1px solid #2a2a4a; cursor: pointer; user-select: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
     th:hover { color: #fff; }
-    td { padding: 10px 12px; border-bottom: 1px solid #1f1f3a; }
+    th .help { cursor: help; color: #e94560; font-size: 10px; vertical-align: super; }
+    td { padding: 10px 8px; border-bottom: 1px solid #1f1f3a; }
     tr.clickable { cursor: pointer; }
     tr.clickable:hover { background: #22224a; }
     .detail-row { display: none; }
@@ -48,6 +49,12 @@
     .signal-bullish { background: #00c85322; color: #00c853; border: 1px solid #00c85344; }
     .signal-bearish { background: #ff174422; color: #ff1744; border: 1px solid #ff174444; }
     .signal-neutral { background: #88888822; color: #aaa; border: 1px solid #88888844; }
+    .rec-tag { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .rec-strong-buy { background: #00c85333; color: #00c853; border: 1px solid #00c85366; }
+    .rec-buy { background: #00c85322; color: #66bb6a; border: 1px solid #66bb6a44; }
+    .rec-hold { background: #ffd60022; color: #ffd600; border: 1px solid #ffd60044; }
+    .rec-sell { background: #ff174422; color: #ff8a80; border: 1px solid #ff8a8044; }
+    .rec-strong-sell { background: #ff174433; color: #ff1744; border: 1px solid #ff174466; }
     .news-item { padding: 6px 0; border-bottom: 1px solid #1f1f3a; font-size: 12px; }
     .news-item:last-child { border: none; }
     .earnings-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; background: #e9456022; color: #e94560; border: 1px solid #e9456044; margin-left: 8px; }
@@ -62,6 +69,14 @@
     .tab-bar { display: flex; gap: 8px; margin-bottom: 16px; }
     .tab { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; border: 1px solid #2a2a4a; color: #888; background: transparent; }
     .tab.active { background: #e94560; color: #fff; border-color: #e94560; }
+    .help-panel { background: #12122a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: none; font-size: 13px; line-height: 1.7; }
+    .help-panel.open { display: block; }
+    .help-panel h3 { color: #e94560; font-size: 14px; margin-bottom: 8px; }
+    .help-panel dt { color: #fff; font-weight: 600; margin-top: 10px; }
+    .help-panel dd { color: #aaa; margin-left: 0; }
+    .help-toggle { background: none; border: 1px solid #2a2a4a; color: #888; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .help-toggle:hover { color: #fff; border-color: #e94560; }
+    .score-reasons { font-size: 11px; color: #888; margin-top: 4px; }
     @media (max-width: 900px) {
       .grid-4 { grid-template-columns: repeat(2, 1fr); }
       .grid-2 { grid-template-columns: 1fr; }
@@ -76,15 +91,51 @@
 <body>
   <div class="header">
     <h1>Market Analyst Dashboard</h1>
-    <div class="updated" id="last-updated">Loading...</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="help-toggle" onclick="document.getElementById('help-panel').classList.toggle('open')">? Help — What do these indicators mean?</button>
+      <div class="updated" id="last-updated">Loading...</div>
+    </div>
   </div>
   <div class="container">
+    <!-- Help Panel -->
+    <div class="help-panel" id="help-panel">
+      <h3>Understanding the Indicators</h3>
+      <dl>
+        <dt>RSI (Relative Strength Index)</dt>
+        <dd>Measures momentum on a 0-100 scale over the last 14 days. <b>Below 30</b> = oversold (potential buying opportunity). <b>Above 70</b> = overbought (may be due for a pullback). <b>40-60</b> = neutral zone.</dd>
+
+        <dt>SMA 50 (50-Day Simple Moving Average)</dt>
+        <dd>Average closing price over the last 50 trading days (~2.5 months). When price is <b>above SMA50</b>, the short-term trend is bullish. When <b>below</b>, it's bearish.</dd>
+
+        <dt>SMA 200 (200-Day Simple Moving Average)</dt>
+        <dd>Average closing price over the last 200 trading days (~10 months). This is the key long-term trend indicator. Price above SMA200 = long-term uptrend. Below = downtrend.</dd>
+
+        <dt>Golden Cross / Death Cross</dt>
+        <dd><b>Golden Cross</b>: SMA50 crosses above SMA200 — strong bullish signal, often marks the start of a major uptrend. <b>Death Cross</b>: SMA50 crosses below SMA200 — bearish signal, may indicate a prolonged downtrend.</dd>
+
+        <dt>52W High/Low</dt>
+        <dd>The highest and lowest price in the last 52 weeks (1 year). Helps gauge where the current price sits in its yearly range.</dd>
+
+        <dt>Daily Change</dt>
+        <dd>Price change compared to yesterday's closing price. Shows today's movement.</dd>
+
+        <dt>YTD (Year-to-Date)</dt>
+        <dd>Total return since January 1st of this year. Shows how the stock has performed this year overall.</dd>
+
+        <dt>Fear & Greed Index</dt>
+        <dd>Market sentiment on a 0-100 scale. <b>0-25</b> = Extreme Fear (investors are very worried — often a buying opportunity). <b>75-100</b> = Extreme Greed (investors are overconfident — often a signal to be cautious).</dd>
+
+        <dt>Recommendation (Algorithm-Based)</dt>
+        <dd>A scoring system based purely on technical indicators (no AI). Scores RSI, SMA positions, golden/death cross, and 52W position. Ranges from <b>Strong Buy</b> (+3 or more) to <b>Strong Sell</b> (-3 or less). This is a mechanical signal, not financial advice — always combine with your own research.</dd>
+      </dl>
+    </div>
+
     <!-- Market Overview -->
     <div class="grid grid-4" id="market-overview" style="margin-bottom:16px"></div>
 
     <!-- Fear & Greed + Allocation -->
     <div class="grid grid-2" style="margin-bottom:16px">
-      <div class="card" id="fear-greed-card">
+      <div class="card">
         <h2>Fear & Greed Index</h2>
         <div class="gauge-container">
           <div style="width:180px;height:120px"><canvas id="gauge-chart"></canvas></div>
@@ -102,7 +153,7 @@
     </div>
 
     <!-- Economic Calendar -->
-    <div class="card" style="margin-bottom:16px" id="econ-card">
+    <div class="card" style="margin-bottom:16px">
       <h2>Economic Calendar & Upcoming Earnings</h2>
       <div id="calendar-content" class="loading">Loading...</div>
     </div>
@@ -113,22 +164,25 @@
         <button class="tab active" onclick="showTab('portfolio')">Portfolio (24)</button>
         <button class="tab" onclick="showTab('watchlist')">Watchlist (11)</button>
       </div>
+      <div style="overflow-x:auto">
       <table>
         <thead>
           <tr>
             <th onclick="sortTable(0)">Ticker</th>
-            <th onclick="sortTable(1)">Allocation</th>
+            <th onclick="sortTable(1)">Alloc</th>
             <th onclick="sortTable(2)">Price</th>
-            <th onclick="sortTable(3)">Change</th>
-            <th onclick="sortTable(4)">RSI</th>
-            <th onclick="sortTable(5)">SMA50</th>
-            <th onclick="sortTable(6)">SMA200</th>
-            <th onclick="sortTable(7)">52W H/L</th>
+            <th onclick="sortTable(3)">Day <span class="help" title="Daily change vs yesterday's close">?</span></th>
+            <th onclick="sortTable(4)">YTD <span class="help" title="Year-to-date return since Jan 1">?</span></th>
+            <th onclick="sortTable(5)">RSI <span class="help" title="Relative Strength Index (14-day). Below 30=oversold, above 70=overbought">?</span></th>
+            <th onclick="sortTable(6)">SMA50 <span class="help" title="50-day Simple Moving Average — short-term trend">?</span></th>
+            <th onclick="sortTable(7)">SMA200 <span class="help" title="200-day Simple Moving Average — long-term trend">?</span></th>
+            <th onclick="sortTable(8)">Action <span class="help" title="Algorithm-based recommendation from technical indicators">?</span></th>
             <th>Signals</th>
           </tr>
         </thead>
         <tbody id="ticker-body"></tbody>
       </table>
+      </div>
     </div>
 
     <!-- Briefing History -->
@@ -183,7 +237,7 @@ function renderMarketOverview() {
     { label: 'VIX', data: vix ? { price: vix.price, changesPercentage: vix.pct } : null },
   ];
   el.innerHTML = items.map(item => {
-    if (!item.data) return `<div class="card market-card"><div class="label">${item.label}</div><div class="price">--</div></div>`;
+    if (!item.data) return `<div class="card market-card"><div class="label">${item.label}</div><div class="price">—</div></div>`;
     const pct = item.data.changesPercentage || 0;
     const cls = pct > 0 ? 'green' : pct < 0 ? 'red' : 'neutral';
     const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '';
@@ -215,19 +269,8 @@ function renderFearGreed() {
   const ctx = document.getElementById('gauge-chart').getContext('2d');
   new Chart(ctx, {
     type: 'doughnut',
-    data: {
-      datasets: [{
-        data: [score, 100 - score],
-        backgroundColor: [color, '#1f1f3a'],
-        borderWidth: 0,
-      }]
-    },
-    options: {
-      circumference: 180, rotation: 270,
-      cutout: '75%',
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-      responsive: true, maintainAspectRatio: false,
-    }
+    data: { datasets: [{ data: [score, 100 - score], backgroundColor: [color, '#1f1f3a'], borderWidth: 0 }] },
+    options: { circumference: 180, rotation: 270, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: false } }, responsive: true, maintainAspectRatio: false }
   });
 }
 
@@ -237,50 +280,36 @@ function renderAllocation() {
   const top10 = portfolio.slice(0, 10);
   const rest = portfolio.slice(10);
   const restTotal = rest.reduce((s, [,v]) => s + v.allocation, 0);
-
   const labels = top10.map(([t]) => t);
   const data = top10.map(([,v]) => v.allocation);
   if (rest.length) { labels.push('Other (' + rest.length + ')'); data.push(Math.round(restTotal * 100) / 100); }
-
-  const colors = ['#e94560','#0f3460','#16213e','#533483','#00c853','#ff6d00','#2979ff','#ffd600','#76ff03','#ff1744','#888'];
+  const colors = ['#e94560','#0f3460','#533483','#00c853','#ff6d00','#2979ff','#ffd600','#76ff03','#ff1744','#00bcd4','#888'];
   const ctx = document.getElementById('alloc-chart').getContext('2d');
   new Chart(ctx, {
     type: 'doughnut',
     data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1, borderColor: '#0f0f1a' }] },
-    options: {
-      cutout: '55%',
-      plugins: {
-        legend: { position: 'right', labels: { color: '#ccc', font: { size: 11 }, padding: 8 } },
-        tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.parsed}%` } }
-      },
-      responsive: true,
-    }
+    options: { cutout: '55%', plugins: { legend: { position: 'right', labels: { color: '#ccc', font: { size: 11 }, padding: 8 } }, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.parsed}%` } } }, responsive: true }
   });
 }
 
 function renderCalendar() {
   const el = document.getElementById('calendar-content');
   let html = '';
-
   const cal = DATA.indicators.calendar || [];
   if (cal.length) {
     html += '<div class="section-label">Economic Events</div>';
-    cal.forEach(e => {
-      html += `<div style="padding:4px 0;font-size:13px"><b>${e.date}</b> — ${e.title}<br><span style="color:#888;font-size:12px">${e.description}</span></div>`;
-    });
+    cal.forEach(e => { html += `<div style="padding:4px 0;font-size:13px"><b>${e.date}</b> — ${e.title}<br><span style="color:#888;font-size:12px">${e.description}</span></div>`; });
   }
-
   const earnings = DATA.earnings || [];
   if (earnings.length) {
     html += '<div class="section-label" style="margin-top:12px">Earnings</div>';
     earnings.forEach(e => {
-      const inPortfolio = DATA.tickers[e.symbol]?.type === 'portfolio';
-      const badge = inPortfolio ? '<span class="earnings-badge">PORTFOLIO</span>' : '<span class="earnings-badge" style="background:#0f346022;color:#0f3460;border-color:#0f346044">WATCHLIST</span>';
+      const inP = DATA.tickers[e.symbol]?.type === 'portfolio';
+      const badge = inP ? '<span class="earnings-badge">PORTFOLIO</span>' : '<span class="earnings-badge" style="background:#0f346022;color:#0f3460;border-color:#0f346044">WATCHLIST</span>';
       const eps = e.eps_est != null ? `EPS est: $${e.eps_est.toFixed(2)}` : 'EPS est: N/A';
       html += `<div style="padding:4px 0;font-size:13px"><b>${e.symbol}</b>${badge} — ${e.date} (${e.hour}) — ${eps}</div>`;
     });
   }
-
   el.innerHTML = html || '<span class="loading">No upcoming events</span>';
   el.classList.remove('loading');
 }
@@ -292,6 +321,12 @@ function signalTag(signal) {
   return `<span class="signal-tag ${cls}">${signal}</span>`;
 }
 
+function recTag(rec) {
+  if (!rec) return '<span class="rec-tag rec-hold">Hold</span>';
+  const cls = { 'Strong Buy': 'rec-strong-buy', 'Buy': 'rec-buy', 'Hold': 'rec-hold', 'Sell': 'rec-sell', 'Strong Sell': 'rec-strong-sell' }[rec] || 'rec-hold';
+  return `<span class="rec-tag ${cls}">${rec}</span>`;
+}
+
 function rsiColor(rsi) {
   if (!rsi) return 'neutral';
   if (rsi > 70) return 'red';
@@ -299,25 +334,29 @@ function rsiColor(rsi) {
   return '';
 }
 
+function fmtPct(val) {
+  if (val == null) return '—';
+  const cls = val > 0 ? 'green' : val < 0 ? 'red' : 'neutral';
+  return `<span class="${cls}">${val > 0 ? '+' : ''}${val.toFixed(2)}%</span>`;
+}
+
 function renderTickers() {
   const tbody = document.getElementById('ticker-body');
-  const entries = Object.entries(DATA.tickers)
-    .filter(([,v]) => v.type === currentTab)
-    .map(([ticker, v]) => ({ ticker, ...v }));
+  const entries = Object.entries(DATA.tickers).filter(([,v]) => v.type === currentTab).map(([ticker, v]) => ({ ticker, ...v }));
 
-  // Sort
   entries.sort((a, b) => {
     let va, vb;
-    const ta = a.technicals || {};
-    const tb = b.technicals || {};
+    const ta = a.technicals || {}; const tb = b.technicals || {};
     switch (sortCol) {
       case 0: va = a.ticker; vb = b.ticker; break;
       case 1: va = a.allocation || 0; vb = b.allocation || 0; break;
       case 2: va = ta.price || 0; vb = tb.price || 0; break;
       case 3: va = ta.change_pct || 0; vb = tb.change_pct || 0; break;
-      case 4: va = ta.rsi || 0; vb = tb.rsi || 0; break;
-      case 5: va = ta.sma50 || 0; vb = tb.sma50 || 0; break;
-      case 6: va = ta.sma200 || 0; vb = tb.sma200 || 0; break;
+      case 4: va = ta.ytd_pct || 0; vb = tb.ytd_pct || 0; break;
+      case 5: va = ta.rsi || 0; vb = tb.rsi || 0; break;
+      case 6: va = ta.sma50 || 0; vb = tb.sma50 || 0; break;
+      case 7: va = ta.sma200 || 0; vb = tb.sma200 || 0; break;
+      case 8: va = ta.score || 0; vb = tb.score || 0; break;
       default: va = a.allocation || 0; vb = b.allocation || 0;
     }
     if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -327,15 +366,11 @@ function renderTickers() {
   let html = '';
   entries.forEach(e => {
     const t = e.technicals || {};
-    const chgCls = (t.change_pct || 0) > 0 ? 'green' : (t.change_pct || 0) < 0 ? 'red' : 'neutral';
     const alloc = e.allocation != null ? e.allocation + '%' : '—';
     const price = t.price ? '$' + t.price.toFixed(2) : '—';
-    const chg = t.change_pct != null ? (t.change_pct > 0 ? '+' : '') + t.change_pct.toFixed(2) + '%' : '—';
     const rsi = t.rsi != null ? t.rsi : '—';
     const sma50 = t.sma50 ? '$' + t.sma50.toFixed(2) : '—';
     const sma200 = t.sma200 ? '$' + t.sma200.toFixed(2) : '—';
-    const h52 = t.high_52w ? '$' + t.high_52w.toFixed(2) : '—';
-    const l52 = t.low_52w ? '$' + t.low_52w.toFixed(2) : '—';
     const signals = (t.signals || []).map(signalTag).join('');
     const earningsBadge = e.earnings?.length ? '<span class="earnings-badge">EARNINGS</span>' : '';
 
@@ -343,16 +378,21 @@ function renderTickers() {
       <td><b>${e.ticker}</b>${earningsBadge}</td>
       <td>${alloc}</td>
       <td>${price}</td>
-      <td class="${chgCls}">${chg}</td>
+      <td>${fmtPct(t.change_pct)}</td>
+      <td>${fmtPct(t.ytd_pct)}</td>
       <td class="${rsiColor(t.rsi)}">${rsi}</td>
       <td>${sma50}</td>
       <td>${sma200}</td>
-      <td style="font-size:11px">${h52} / ${l52}</td>
+      <td>${recTag(t.recommendation)}</td>
       <td>${signals}</td>
     </tr>`;
 
     // Detail row
-    html += `<tr class="detail-row" id="detail-${e.ticker}"><td colspan="9">
+    const h52 = t.high_52w ? '$' + t.high_52w.toFixed(2) : '—';
+    const l52 = t.low_52w ? '$' + t.low_52w.toFixed(2) : '—';
+    const reasons = (t.score_reasons || []).map(r => `<div style="padding:2px 0">• ${r}</div>`).join('');
+
+    html += `<tr class="detail-row" id="detail-${e.ticker}"><td colspan="10">
       <div class="detail-content">
         <div>
           <div class="section-label">3-Month Price Chart</div>
@@ -361,14 +401,20 @@ function renderTickers() {
         <div class="detail-info">
           <div class="section-label">Details</div>
           <div class="row"><span class="label">Price</span><span>${price}</span></div>
-          <div class="row"><span class="label">Daily Change</span><span class="${chgCls}">${chg}</span></div>
-          <div class="row"><span class="label">RSI (14)</span><span class="${rsiColor(t.rsi)}">${rsi}</span></div>
-          <div class="row"><span class="label">SMA 50</span><span>${sma50}</span></div>
-          <div class="row"><span class="label">SMA 200</span><span>${sma200}</span></div>
-          <div class="row"><span class="label">52W High</span><span>${h52}</span></div>
-          <div class="row"><span class="label">52W Low</span><span>${l52}</span></div>
+          <div class="row"><span class="label">Daily Change</span>${fmtPct(t.change_pct)}</div>
+          <div class="row"><span class="label">YTD Return</span>${fmtPct(t.ytd_pct)}</div>
+          <div class="row"><span class="label">RSI (14-day)</span><span class="${rsiColor(t.rsi)}">${rsi}${t.rsi > 70 ? ' — Overbought' : t.rsi < 30 ? ' — Oversold' : ''}</span></div>
+          <div class="row"><span class="label">SMA 50</span><span>${sma50}${t.sma50 && t.price > t.sma50 ? ' ✓ above' : t.sma50 ? ' ✗ below' : ''}</span></div>
+          <div class="row"><span class="label">SMA 200</span><span>${sma200}${t.sma200 && t.price > t.sma200 ? ' ✓ above' : t.sma200 ? ' ✗ below' : ''}</span></div>
+          <div class="row"><span class="label">52-Week High</span><span>${h52}</span></div>
+          <div class="row"><span class="label">52-Week Low</span><span>${l52}</span></div>
           <div class="row"><span class="label">Allocation</span><span>${alloc}</span></div>
           ${e.earnings?.length ? `<div class="row"><span class="label">Next Earnings</span><span>${e.earnings[0].date} (${e.earnings[0].hour})</span></div>` : ''}
+          <div style="margin-top:12px">
+            <div class="section-label">Technical Recommendation</div>
+            <div style="margin-bottom:6px">${recTag(t.recommendation)} <span style="color:#888;font-size:12px">(score: ${t.score || 0})</span></div>
+            <div class="score-reasons">${reasons || 'No signals'}</div>
+          </div>
           <div style="margin-top:8px"><div class="section-label">Signals</div>${signals || '<span style="color:#555">None</span>'}</div>
           ${e.news?.length ? `<div style="margin-top:8px"><div class="section-label">Recent News</div>${e.news.map(n => `<div class="news-item">${n.headline}</div>`).join('')}</div>` : ''}
         </div>
@@ -382,9 +428,7 @@ function renderTickers() {
 function toggleDetail(ticker) {
   const row = document.getElementById('detail-' + ticker);
   const isOpen = row.classList.contains('open');
-  // Close all
   document.querySelectorAll('.detail-row.open').forEach(r => r.classList.remove('open'));
-  // Destroy old charts
   Object.values(openCharts).forEach(c => c.destroy());
   openCharts = {};
 
@@ -395,24 +439,19 @@ function toggleDetail(ticker) {
       const ctx = document.getElementById('chart-' + ticker).getContext('2d');
       const labels = t.chart.map(p => new Date(p.t * 1000).toLocaleDateString());
       const prices = t.chart.map(p => p.c);
-      const sma50Line = t.sma50 ? Array(prices.length).fill(t.sma50) : null;
-      const sma200Line = t.sma200 ? Array(prices.length).fill(t.sma200) : null;
       const datasets = [{
-        label: ticker, data: prices,
-        borderColor: '#e94560', backgroundColor: '#e9456015',
+        label: ticker, data: prices, borderColor: '#e94560', backgroundColor: '#e9456015',
         fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
       }];
-      if (sma50Line) datasets.push({ label: 'SMA50', data: sma50Line, borderColor: '#2979ff', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
-      if (sma200Line) datasets.push({ label: 'SMA200', data: sma200Line, borderColor: '#ffd600', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
-
+      if (t.sma50) datasets.push({ label: 'SMA50', data: Array(prices.length).fill(t.sma50), borderColor: '#2979ff', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
+      if (t.sma200) datasets.push({ label: 'SMA200', data: Array(prices.length).fill(t.sma200), borderColor: '#ffd600', borderWidth: 1, borderDash: [5,5], pointRadius: 0, fill: false });
       openCharts[ticker] = new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets },
+        type: 'line', data: { labels, datasets },
         options: {
           responsive: true, maintainAspectRatio: false,
           scales: {
-            x: { display: true, ticks: { color: '#555', maxTicksLimit: 6, font: { size: 10 } }, grid: { color: '#1f1f3a' } },
-            y: { display: true, ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#1f1f3a' } },
+            x: { ticks: { color: '#555', maxTicksLimit: 6, font: { size: 10 } }, grid: { color: '#1f1f3a' } },
+            y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#1f1f3a' } },
           },
           plugins: { legend: { labels: { color: '#888', font: { size: 11 } } } },
         }
@@ -436,8 +475,8 @@ function sortTable(col) {
 function renderBriefings() {
   const el = document.getElementById('briefing-history');
   if (!BRIEFINGS.length) { el.innerHTML = 'No briefings yet'; el.classList.remove('loading'); return; }
-  el.innerHTML = BRIEFINGS.slice(0, 15).map((b, i) => {
-    const typeLabel = b.type === 'pre-market' ? '🌅 Pre-Market' : '🌆 Pre-Close';
+  el.innerHTML = BRIEFINGS.slice(0, 15).map(b => {
+    const typeLabel = b.type === 'pre-market' ? 'Pre-Market' : 'Pre-Close';
     return `<div class="briefing-card" onclick="this.classList.toggle('open')">
       <div class="meta"><span>${b.date} — ${typeLabel}</span><span>Click to expand</span></div>
       <div class="briefing-content">${b.content}</div>
