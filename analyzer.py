@@ -608,7 +608,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts):
     cyg = growth_score(fund.get("currentYearGrowth"))
     grow_score = (rg + eg + cyg) / 3
     if grow_score >= 70:
-        reasons.append(f"Strong growth (Rev={fund.get('revenueGrowth', 0):.0%}, EPS={fund.get('earningsGrowth', 0):.0%}) (+Fund)")
+        reasons.append(f"Strong growth (Rev={fund.get('revenueGrowth') or 0:.0%}, EPS={fund.get('earningsGrowth') or 0:.0%}) (+Fund)")
     elif grow_score <= 30:
         reasons.append(f"Weak growth (-Fund)")
 
