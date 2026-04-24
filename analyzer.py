@@ -642,16 +642,18 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     if not wl_picks:
         algo_text += "- None\n"
 
-    # --- NOTABLE TECHNICALS ---
-    notable_text = "\n## Notable Technical Signals\n"
+    # --- FULL TECHNICAL DATA ---
+    tech_text = "\n## Technical Indicators\n"
     for ticker, tech in technicals.items():
-        if not tech:
-            continue
-        rsi = tech.get("rsi")
-        signals = tech.get("signals", [])
-        alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
-        if (rsi and (rsi > 70 or rsi < 30)) or "golden cross" in signals or "death cross" in signals:
-            notable_text += f"- {ticker}{alloc}: RSI={rsi}, {', '.join(signals[:4])}\n"
+        if tech:
+            rsi_str = f"RSI={tech['rsi']}" if tech.get("rsi") else "RSI=N/A"
+            sma50_str = f"SMA50=${tech['sma50']}" if tech.get("sma50") else "SMA50=N/A"
+            sma200_str = f"SMA200=${tech['sma200']}" if tech.get("sma200") else "SMA200=N/A"
+            signals = ", ".join(tech.get("signals", [])) if tech.get("signals") else "no signals"
+            alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
+            pt_mean = tech.get("target_mean")
+            pt_str = f" | target=${pt_mean:.0f}" if pt_mean else ""
+            tech_text += f"- {ticker}{alloc}: ${tech['price']:.2f} ({tech.get('change_pct', 0):+.2f}%) | {rsi_str} | {sma50_str} | {sma200_str} | score={tech.get('score', 'N/A')}{pt_str} | {signals}\n"
 
     # --- CONCENTRATION RISKS ---
     risk_text = "\n## Concentration Risks\n"
@@ -659,75 +661,86 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         if alloc > 10:
             risk_text += f"- {ticker}: {alloc}% of portfolio\n"
 
-    # --- NEWS (with per-ticker headlines) ---
+    # --- NEWS (with full summaries) ---
     news_text = "\n## General Market News\n"
     for article in market_news[:5]:
-        news_text += f"- {article['headline']}: {article['summary'][:100]}\n"
+        news_text += f"- {article['headline']}: {article['summary']}\n"
 
     news_text += "\n## Portfolio Holdings News\n"
     for ticker, articles in portfolio_news.items():
         if articles:
             alloc = portfolio.get(ticker, 0)
-            news_text += f"- {ticker} ({alloc}%): {articles[0]['headline']}\n"
-            if len(articles) > 1:
-                news_text += f"  Also: {articles[1]['headline']}\n"
+            news_text += f"\n### {ticker} ({alloc}% of portfolio)\n"
+            for a in articles:
+                news_text += f"- {a['headline']}: {a['summary']}\n"
 
-    wl_has_news = any(articles for articles in watchlist_news.values())
-    if wl_has_news:
+    if any(articles for articles in watchlist_news.values()):
         news_text += "\n## Watchlist News\n"
         for ticker, articles in watchlist_news.items():
             if articles:
-                news_text += f"- {ticker}: {articles[0]['headline']}\n"
+                news_text += f"\n### {ticker}\n"
+                for a in articles:
+                    news_text += f"- {a['headline']}: {a['summary']}\n"
 
-    return f"""You are a market analyst reviewing our algorithm's output and preparing a daily briefing {time_context}.
+    return f"""You are a stock market analyst advising a long-term investor.
+Produce a Telegram message briefing {time_context} using ALL the data below.
 
-YOUR ROLE: Our scoring algorithm (0-100, based on RSI, MACD, SMA, volume, ADX, and analyst price targets) has already made BUY/HOLD/SELL decisions. Your job is to:
-1. Present the market data and algorithm recommendations clearly
-2. For each portfolio ticker with news, add a brief note about the news and its impact
-3. Flag if you DISAGREE with any algorithm recommendation based on news or upcoming events (e.g. "algo says BUY but earnings in 2 days — consider waiting")
-4. Highlight concentration risks inline
+YOUR ROLE: Our scoring algorithm (0-100, based on RSI, MACD, SMA, volume, ADX, and analyst price targets) has pre-computed BUY/HOLD/SELL decisions shown in the data. Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
 
 FORMAT RULES (strict):
-- MAXIMUM 3800 characters. Must fit in ONE Telegram message.
+- Keep under 3900 characters total.
 - ONLY use <b> and <i> HTML tags. No <u>, no <s>, no other tags.
-- Use \u2022 bullets, keep each bullet to one line.
+- Use emojis liberally to make it scannable and visually appealing.
+- Use \u2022 bullets for lists, keep each bullet to one line.
 
-EXACTLY these 8 sections in this order:
+Structure your message EXACTLY in this order:
 
 <b>\U0001f4ca {header}</b>
 
 <b>\U0001f3af MARKET DASHBOARD</b>
-Show indices with arrows (\u2b06\ufe0f/\u2b07\ufe0f), VIX, Fear & Greed score with emoji (\U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+) and trend vs previous/1 month.
+Show indices with price and arrows (\u2b06\ufe0f/\u2b07\ufe0f), VIX with arrow.
+Fear & Greed score with emoji (\U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+).
+Include trend vs previous close and 1 month ago with arrows.
 
 <b>\U0001f4c5 EARNINGS ALERT</b>
-List upcoming earnings from the data. Use \u26a0\ufe0f for this week, \U0001f4c6 for next week. Show [PORTFOLIO] or [WATCHLIST] and allocation %.
+List upcoming earnings from data. Use \u26a0\ufe0f for this week, \U0001f4c6 for next week. Show [PORTFOLIO] or [WATCHLIST] and allocation %.
 
 <b>\U0001f4b0 ECONOMIC CALENDAR</b>
-Key upcoming economic events. One line each.
+Key upcoming economic events with date and descriptive emoji. One line each.
+
+<b>\U0001f4c8 TECHNICAL SNAPSHOT</b>
+\U0001f525 Overbought (RSI > 70): list tickers with allocation% or [WL] and RSI value.
+\U0001f9ca Oversold (RSI < 30): list tickers with allocation% or [WL] and RSI value.
+\U0001f6a7 Death Crosses Identified: comma-separated list of tickers.
+\U0001f31f Golden Crosses Identified: comma-separated list of tickers.
+Only include categories that have tickers. Skip empty ones.
 
 <b>\U0001f4bc PORTFOLIO PULSE</b>
-Only tickers with meaningful news. For each: ticker, allocation %, one-line news summary, impact (\U0001f7e2 bullish / \U0001f534 bearish / \u26aa neutral). Max 5 tickers.
-
-<b>\U0001f4a1 RECOMMENDATIONS</b>
-Present the algorithm's BUY/HOLD/SELL decisions. For each ticker add brief context from news/technicals/price target.
-\U0001f7e2 <b>BUY/ADD</b>: Max 3 tickers. Include price target upside if available.
-\U0001f7e1 <b>HOLD</b>: Max 3 tickers.
-\U0001f534 <b>SELL/REDUCE</b>: Max 3 tickers.
-\u26a0\ufe0f Add inline warnings for concentration risk (>10%) or death crosses.
-\U0001f9d0 Flag if you disagree with the algorithm.
-Skip empty categories.
+For each portfolio ticker with meaningful news (sorted by allocation):
+Colored dot (\U0001f7e2 positive / \U0001f534 negative / \u26aa neutral price action), then <b>TICKER (alloc%)</b>: one-line news summary. End with impact (\U0001f7e2 Bullish / \U0001f534 Bearish / \u26aa Neutral Impact).
 
 <b>\U0001f440 WATCHLIST RADAR</b>
-Max 3 watchlist tickers with entry signals or notable news. One line each.
+Max 3 watchlist tickers with notable news or entry signals. For each: \U0001f7e1 <b>TICKER</b>: 2-3 sentence analysis including technicals, news catalyst, and actionable guidance.
+
+<b>\U0001f4a1 RECOMMENDATIONS</b>
+Based on ALL data (algorithm scores + news + technicals + sentiment), give your recommendations:
+\U0001f7e2 <b>BUY/ADD</b>: Which tickers to buy/add and WHY. Include price target upside if available. Add \u2705 checkmark.
+\U0001f7e1 <b>HOLD</b>: Which to hold and WHY. Group similar tickers together.
+\U0001f534 <b>SELL/REDUCE</b>: Which to sell/trim and WHY. Add \u274c marker.
+Include watchlist tickers in BUY if there's a good entry signal.
+\u26a0\ufe0f Add inline warnings for concentration risk (>10%) or death crosses.
+Skip empty categories.
+
+<b>\u26a0\ufe0f RISK ALERTS</b>
+Flag concentration risks (positions >10%), correlated positions, death crosses needing attention.
 
 <b>\U0001f30d MARKET OUTLOOK</b>
 2-3 sentences on overall sentiment and what to watch {time_context}.
 
-Do NOT include an "Opportunities" section or suggest stocks outside the portfolio/watchlist.
-Do NOT add a separate "Risk Alerts" section — fold risks into RECOMMENDATIONS.
+Do NOT suggest stocks outside the portfolio/watchlist.
 
 DATA:
-{market_text}{earn_text}{cal_text}{algo_text}{notable_text}{risk_text}{news_text}"""
+{market_text}{earn_text}{cal_text}{algo_text}{tech_text}{risk_text}{news_text}"""
 
 
 def analyze(prompt):
@@ -760,21 +773,37 @@ def send_telegram(text, bot_token, chat_id):
     # Sanitize HTML to prevent parse failures
     text = sanitize_telegram_html(text)
 
-    # Send as a single message (must be under 4096 chars)
-    for mode in ["HTML", None]:
-        args = ["curl", "-s", "-X", "POST",
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                "-d", f"chat_id={chat_id}",
-                "--data-urlencode", f"text={text}"]
-        if mode:
-            args += ["-d", f"parse_mode={mode}"]
-        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
-        resp = json.loads(result.stdout)
-        if resp.get("ok"):
-            return
-        if mode is None:
-            raise RuntimeError(f"Telegram error: {resp}")
-        print(f"Warning: HTML parse failed, sending as plain text")
+    # Split into chunks if too long for single Telegram message (4096 char limit)
+    chunks = []
+    if len(text) <= 4000:
+        chunks = [text]
+    else:
+        lines = text.split("\n")
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 4000 and chunk:
+                chunks.append(chunk)
+                chunk = line
+            else:
+                chunk = chunk + "\n" + line if chunk else line
+        if chunk:
+            chunks.append(chunk)
+
+    for chunk in chunks:
+        for mode in ["HTML", None]:
+            args = ["curl", "-s", "-X", "POST",
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    "-d", f"chat_id={chat_id}",
+                    "--data-urlencode", f"text={chunk}"]
+            if mode:
+                args += ["-d", f"parse_mode={mode}"]
+            result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            resp = json.loads(result.stdout)
+            if resp.get("ok"):
+                break
+            if mode is None:
+                raise RuntimeError(f"Telegram error: {resp}")
+            print(f"Warning: HTML parse failed, sending as plain text")
 
 
 def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings):
@@ -895,14 +924,7 @@ def main():
         indicators, earnings, portfolio, watchlist, technicals, briefing_type,
     )
     analysis = analyze(prompt)
-
-    # Safety net: truncate if too long for single Telegram message
     print(f"Briefing length: {len(analysis)} chars")
-    if len(analysis) > 4000:
-        print(f"Warning: briefing is {len(analysis)} chars, truncating...")
-        cutoff = analysis[:4000].rfind('\n\n<b>')
-        if cutoff > 2000:
-            analysis = analysis[:cutoff]
 
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")
