@@ -440,20 +440,24 @@ def init_yahoo_auth():
     """Get Yahoo Finance cookie + crumb for authenticated endpoints."""
     global _yf_cookie_file, _yf_crumb
     import tempfile
-    _yf_cookie_file = tempfile.mktemp(suffix=".txt")
-    subprocess.run(
-        ["curl", "-s", "-c", _yf_cookie_file, "https://fc.yahoo.com/",
-         "-H", "User-Agent: Mozilla/5.0"],
-        capture_output=True, text=True, timeout=10,
-    )
-    result = subprocess.run(
-        ["curl", "-s", "-b", _yf_cookie_file,
-         "https://query2.finance.yahoo.com/v1/test/getcrumb",
-         "-H", "User-Agent: Mozilla/5.0"],
-        capture_output=True, text=True, timeout=10,
-    )
-    _yf_crumb = result.stdout.strip()
-    print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
+    try:
+        _yf_cookie_file = tempfile.mktemp(suffix=".txt")
+        subprocess.run(
+            ["curl", "-s", "-c", _yf_cookie_file, "https://fc.yahoo.com/",
+             "-H", "User-Agent: Mozilla/5.0"],
+            capture_output=True, text=True, timeout=15,
+        )
+        result = subprocess.run(
+            ["curl", "-s", "-b", _yf_cookie_file,
+             "https://query2.finance.yahoo.com/v1/test/getcrumb",
+             "-H", "User-Agent: Mozilla/5.0"],
+            capture_output=True, text=True, timeout=15,
+        )
+        _yf_crumb = result.stdout.strip()
+        print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
+    except Exception as e:
+        print(f"Warning: Yahoo Finance auth failed ({e}), continuing without price targets")
+        _yf_crumb = None
 
 
 def fetch_fundamentals(ticker):
@@ -766,38 +770,43 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
             continue
         alloc = portfolio.get(ticker, 0)
         rec = tech.get("recommendation", "Hold")
-        score = tech.get("score", 50)
+        combined = tech.get("combined_score", tech.get("score", 50))
+        tech_sc = tech.get("tech_score", tech.get("score", 50))
+        fund_sc = tech.get("fund_score", 50)
         rsi = tech.get("rsi")
         signals = tech.get("signals", [])
         pt_mean = tech.get("target_mean")
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
         upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
         has_earnings = any(e["symbol"] == ticker for e in earnings)
+        fund = tech.get("fundamentals") or {}
+        pe_str = f"P/E={fund['trailingPE']:.1f}" if fund.get("trailingPE") else "P/E=N/A"
+        fpe_str = f"FwdP/E={fund['forwardPE']:.1f}" if fund.get("forwardPE") else ""
 
-        entry = f"{ticker} ({alloc}%): score={score}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(signals[:4])}]"
+        entry = f"{ticker} ({alloc}%): combined={combined} (tech={tech_sc}, fund={fund_sc}), ${tech['price']:.2f}, RSI={rsi}, {pe_str}, {fpe_str}, {upside_str}, signals=[{', '.join(signals[:4])}]"
         if has_earnings:
             entry += " *** EARNINGS SOON ***"
 
         if rec in ("Strong Buy", "Buy"):
-            buys.append((score, entry))
+            buys.append((combined, entry))
         elif rec in ("Strong Sell", "Sell"):
-            sells.append((score, entry))
+            sells.append((combined, entry))
         else:
-            holds.append((score, entry))
+            holds.append((combined, entry))
 
     # Watchlist picks
     wl_picks = []
     for ticker, tech in technicals.items():
         if not tech or ticker in portfolio:
             continue
-        score = tech.get("score", 50)
+        combined = tech.get("combined_score", tech.get("score", 50))
         rec = tech.get("recommendation", "Hold")
         rsi = tech.get("rsi")
         pt_mean = tech.get("target_mean")
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
         upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
         if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
-            wl_picks.append((score, f"{ticker}: score={score}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
+            wl_picks.append((combined, f"{ticker}: combined={combined}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
 
     buys.sort(key=lambda x: -x[0])
     sells.sort(key=lambda x: x[0])
