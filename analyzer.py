@@ -375,12 +375,43 @@ def fetch_technicals(ticker):
         return None
 
 
+_yf_cookie_file = None
+_yf_crumb = None
+
+
+def init_yahoo_auth():
+    """Get Yahoo Finance cookie + crumb for authenticated endpoints."""
+    global _yf_cookie_file, _yf_crumb
+    import tempfile
+    _yf_cookie_file = tempfile.mktemp(suffix=".txt")
+    subprocess.run(
+        ["curl", "-s", "-c", _yf_cookie_file, "https://fc.yahoo.com/",
+         "-H", "User-Agent: Mozilla/5.0"],
+        capture_output=True, text=True, timeout=10,
+    )
+    result = subprocess.run(
+        ["curl", "-s", "-b", _yf_cookie_file,
+         "https://query2.finance.yahoo.com/v1/test/getcrumb",
+         "-H", "User-Agent: Mozilla/5.0"],
+        capture_output=True, text=True, timeout=10,
+    )
+    _yf_crumb = result.stdout.strip()
+    print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
+
+
 def fetch_price_target(ticker):
-    """Fetch analyst price targets from Yahoo Finance quoteSummary."""
+    """Fetch analyst price targets from Yahoo Finance quoteSummary (requires auth)."""
+    global _yf_cookie_file, _yf_crumb
+    if not _yf_crumb:
+        return None
     try:
-        data = curl_json(
-            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=financialData"
+        result = subprocess.run(
+            ["curl", "-s", "-b", _yf_cookie_file,
+             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=financialData&crumb={_yf_crumb}",
+             "-H", "User-Agent: Mozilla/5.0"],
+            capture_output=True, text=True, timeout=15,
         )
+        data = json.loads(result.stdout)
         fd = data["quoteSummary"]["result"][0]["financialData"]
         return {
             "target_high": fd.get("targetHighPrice", {}).get("raw"),
@@ -515,12 +546,12 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         time_context = "as we approach market close"
 
     # --- MARKET CONTEXT ---
-    market_text = "## Market Context\n"
+    market_text = "## Market Indicators\n"
     fg = indicators.get("fear_greed")
     if fg:
-        market_text += f"- Fear & Greed: {fg['now']} (prev: {fg['previous_close']}, 1m ago: {fg['one_month_ago']})\n"
+        market_text += f"- Fear & Greed: {fg['now']} (prev: {fg['previous_close']}, 1w ago: {fg['one_week_ago']}, 1m ago: {fg['one_month_ago']})\n"
     indices = indicators.get("indices", {})
-    for name, key in [("S&P 500", "sp500"), ("Dow", "dow"), ("NASDAQ", "nasdaq")]:
+    for name, key in [("S&P 500", "sp500"), ("Dow Jones", "dow"), ("NASDAQ", "nasdaq")]:
         idx = indices.get(key)
         if idx:
             market_text += f"- {name}: ${idx['price']:,.2f} ({idx['changesPercentage']:+.2f}%)\n"
@@ -528,16 +559,23 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     if vix:
         market_text += f"- VIX: {vix['price']} ({vix['pct']:+.2f}%)\n"
 
-    # --- UPCOMING EVENTS ---
-    events_text = "\n## Upcoming Events\n"
-    cal = indicators.get("calendar", [])
-    for e in cal[:3]:
-        events_text += f"- {e['date']}: {e['title']}\n"
+    # --- EARNINGS ---
+    earn_text = ""
     if earnings:
-        for e in earnings[:6]:
-            held = "PORTFOLIO" if e["symbol"] in portfolio else "WL"
+        earn_text = "\n## Upcoming Earnings\n"
+        for e in earnings:
+            eps = f"EPS est: ${e['eps_est']:.2f}" if e["eps_est"] is not None else "EPS est: N/A"
+            held = "PORTFOLIO" if e["symbol"] in portfolio else "WATCHLIST"
             alloc = f" ({portfolio[e['symbol']]}%)" if e["symbol"] in portfolio else ""
-            events_text += f"- [{held}] {e['symbol']}{alloc}: earnings {e['date']} ({e['hour']})\n"
+            earn_text += f"- [{held}] {e['symbol']}{alloc}: {e['date']} ({e['hour']}) \u2014 {eps}\n"
+
+    # --- ECONOMIC CALENDAR ---
+    cal_text = ""
+    cal = indicators.get("calendar", [])
+    if cal:
+        cal_text = "\n## Economic Calendar\n"
+        for e in cal[:5]:
+            cal_text += f"- {e['date']}: {e['title']} - {e.get('description', '')}\n"
 
     # --- PRE-COMPUTE ALGORITHM DECISIONS ---
     buys, holds, sells = [], [], []
@@ -552,10 +590,9 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         pt_mean = tech.get("target_mean")
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
         upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
-        reasons = ", ".join(tech.get("score_reasons", [])[:3])
         has_earnings = any(e["symbol"] == ticker for e in earnings)
 
-        entry = f"{ticker} ({alloc}%): score={score}, ${tech['price']}, RSI={rsi}, {upside_str}, signals=[{', '.join(signals[:3])}], reasons=[{reasons}]"
+        entry = f"{ticker} ({alloc}%): score={score}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(signals[:4])}]"
         if has_earnings:
             entry += " *** EARNINGS SOON ***"
 
@@ -578,35 +615,43 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
         upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
         if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
-            wl_picks.append((score, f"{ticker} [WL]: score={score}, ${tech['price']}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
+            wl_picks.append((score, f"{ticker}: score={score}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
 
     buys.sort(key=lambda x: -x[0])
     sells.sort(key=lambda x: x[0])
     holds.sort(key=lambda x: -x[0])
     wl_picks.sort(key=lambda x: -x[0])
 
-    algo_text = "\n## ALGORITHM DECISIONS (pre-computed — present these to the user)\n"
-    algo_text += "\n### BUY/ADD (top picks by score):\n"
+    algo_text = "\n## ALGORITHM DECISIONS (pre-computed)\n"
+    algo_text += "\n### BUY/ADD (top by score):\n"
     for _, entry in buys[:3]:
         algo_text += f"- {entry}\n"
     if not buys:
         algo_text += "- None\n"
-
     algo_text += "\n### HOLD:\n"
-    for _, entry in holds[:3]:
+    for _, entry in holds[:5]:
         algo_text += f"- {entry}\n"
-
     algo_text += "\n### SELL/REDUCE (weakest by score):\n"
     for _, entry in sells[:3]:
         algo_text += f"- {entry}\n"
     if not sells:
         algo_text += "- None\n"
-
     algo_text += "\n### WATCHLIST ENTRY SIGNALS:\n"
-    for _, entry in wl_picks[:2]:
+    for _, entry in wl_picks[:3]:
         algo_text += f"- {entry}\n"
     if not wl_picks:
         algo_text += "- None\n"
+
+    # --- NOTABLE TECHNICALS ---
+    notable_text = "\n## Notable Technical Signals\n"
+    for ticker, tech in technicals.items():
+        if not tech:
+            continue
+        rsi = tech.get("rsi")
+        signals = tech.get("signals", [])
+        alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
+        if (rsi and (rsi > 70 or rsi < 30)) or "golden cross" in signals or "death cross" in signals:
+            notable_text += f"- {ticker}{alloc}: RSI={rsi}, {', '.join(signals[:4])}\n"
 
     # --- CONCENTRATION RISKS ---
     risk_text = "\n## Concentration Risks\n"
@@ -614,53 +659,75 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         if alloc > 10:
             risk_text += f"- {ticker}: {alloc}% of portfolio\n"
 
-    # --- NEWS ---
-    news_text = "\n## Market News\n"
+    # --- NEWS (with per-ticker headlines) ---
+    news_text = "\n## General Market News\n"
     for article in market_news[:5]:
-        news_text += f"- {article['headline']}\n"
-    news_text += "\n## Ticker News\n"
-    for ticker, articles in {**portfolio_news, **watchlist_news}.items():
+        news_text += f"- {article['headline']}: {article['summary'][:100]}\n"
+
+    news_text += "\n## Portfolio Holdings News\n"
+    for ticker, articles in portfolio_news.items():
         if articles:
-            news_text += f"- {ticker}: {articles[0]['headline']}\n"
+            alloc = portfolio.get(ticker, 0)
+            news_text += f"- {ticker} ({alloc}%): {articles[0]['headline']}\n"
+            if len(articles) > 1:
+                news_text += f"  Also: {articles[1]['headline']}\n"
+
+    wl_has_news = any(articles for articles in watchlist_news.values())
+    if wl_has_news:
+        news_text += "\n## Watchlist News\n"
+        for ticker, articles in watchlist_news.items():
+            if articles:
+                news_text += f"- {ticker}: {articles[0]['headline']}\n"
 
     return f"""You are a market analyst reviewing our algorithm's output and preparing a daily briefing {time_context}.
 
-YOUR ROLE: Our scoring algorithm has already analyzed all tickers and made BUY/HOLD/SELL decisions (shown below). Your job is to:
-1. Present the algorithm's recommendations clearly
-2. Add brief context from news/earnings/macro for each recommendation
-3. Flag if you DISAGREE with any recommendation based on the news or upcoming events (e.g. "algorithm says BUY but earnings in 2 days — consider waiting")
+YOUR ROLE: Our scoring algorithm (0-100, based on RSI, MACD, SMA, volume, ADX, and analyst price targets) has already made BUY/HOLD/SELL decisions. Your job is to:
+1. Present the market data and algorithm recommendations clearly
+2. For each portfolio ticker with news, add a brief note about the news and its impact
+3. Flag if you DISAGREE with any algorithm recommendation based on news or upcoming events (e.g. "algo says BUY but earnings in 2 days — consider waiting")
 4. Highlight concentration risks inline
 
 FORMAT RULES (strict):
-- MAXIMUM 2800 characters. Must fit in ONE Telegram message.
-- ONLY use <b> and <i> HTML tags. No other tags.
-- Use \u2022 bullets, one short line each.
-- Be concise — short sentences, no filler.
+- MAXIMUM 3800 characters. Must fit in ONE Telegram message.
+- ONLY use <b> and <i> HTML tags. No <u>, no <s>, no other tags.
+- Use \u2022 bullets, keep each bullet to one line.
 
-EXACTLY these 5 sections:
+EXACTLY these 8 sections in this order:
 
 <b>\U0001f4ca {header}</b>
 
-<b>\U0001f3af MARKET</b>
-Indices with arrows, VIX, Fear & Greed (emoji: \U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+). Max 5 lines.
+<b>\U0001f3af MARKET DASHBOARD</b>
+Show indices with arrows (\u2b06\ufe0f/\u2b07\ufe0f), VIX, Fear & Greed score with emoji (\U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+) and trend vs previous/1 month.
 
-<b>\U0001f4c5 UPCOMING</b>
-Top 5 items: earnings with dates + key economic events. One line each.
+<b>\U0001f4c5 EARNINGS ALERT</b>
+List upcoming earnings from the data. Use \u26a0\ufe0f for this week, \U0001f4c6 for next week. Show [PORTFOLIO] or [WATCHLIST] and allocation %.
 
-<b>\U0001f4a1 ACTIONS</b>
-Present the algorithm's decisions below. For each ticker: one line with ticker, allocation %, the recommendation, and brief WHY (add news context or your own note).
-Use \U0001f7e2 for BUY, \U0001f7e1 for HOLD, \U0001f534 for SELL.
-Add \u26a0\ufe0f inline for concentration risk (>10%) or earnings-soon warnings.
-If you disagree with a recommendation, say so briefly with \U0001f9d0.
-Max 2 per category. Skip empty categories.
+<b>\U0001f4b0 ECONOMIC CALENDAR</b>
+Key upcoming economic events. One line each.
 
-<b>\U0001f440 WATCHLIST</b>
-Max 2 watchlist tickers with entry signals. Skip if none.
+<b>\U0001f4bc PORTFOLIO PULSE</b>
+Only tickers with meaningful news. For each: ticker, allocation %, one-line news summary, impact (\U0001f7e2 bullish / \U0001f534 bearish / \u26aa neutral). Max 5 tickers.
 
-Do NOT add any other sections. No Outlook, no Opportunities, no Technical Snapshot, no Risk Alerts section.
+<b>\U0001f4a1 RECOMMENDATIONS</b>
+Present the algorithm's BUY/HOLD/SELL decisions. For each ticker add brief context from news/technicals/price target.
+\U0001f7e2 <b>BUY/ADD</b>: Max 3 tickers. Include price target upside if available.
+\U0001f7e1 <b>HOLD</b>: Max 3 tickers.
+\U0001f534 <b>SELL/REDUCE</b>: Max 3 tickers.
+\u26a0\ufe0f Add inline warnings for concentration risk (>10%) or death crosses.
+\U0001f9d0 Flag if you disagree with the algorithm.
+Skip empty categories.
+
+<b>\U0001f440 WATCHLIST RADAR</b>
+Max 3 watchlist tickers with entry signals or notable news. One line each.
+
+<b>\U0001f30d MARKET OUTLOOK</b>
+2-3 sentences on overall sentiment and what to watch {time_context}.
+
+Do NOT include an "Opportunities" section or suggest stocks outside the portfolio/watchlist.
+Do NOT add a separate "Risk Alerts" section — fold risks into RECOMMENDATIONS.
 
 DATA:
-{market_text}{events_text}{algo_text}{risk_text}{news_text}"""
+{market_text}{earn_text}{cal_text}{algo_text}{notable_text}{risk_text}{news_text}"""
 
 
 def analyze(prompt):
@@ -787,6 +854,9 @@ def main():
     vix = fetch_vix()
     earnings = fetch_earnings(all_tickers, finnhub_key)
 
+    # Initialize Yahoo Finance auth for price targets
+    init_yahoo_auth()
+
     # Fetch technical indicators and price targets for all tickers
     print("Fetching technical indicators and price targets...")
     technicals = {}
@@ -827,9 +897,10 @@ def main():
     analysis = analyze(prompt)
 
     # Safety net: truncate if too long for single Telegram message
-    if len(analysis) > 3500:
+    print(f"Briefing length: {len(analysis)} chars")
+    if len(analysis) > 4000:
         print(f"Warning: briefing is {len(analysis)} chars, truncating...")
-        cutoff = analysis[:3500].rfind('\n\n<b>')
+        cutoff = analysis[:4000].rfind('\n\n<b>')
         if cutoff > 2000:
             analysis = analysis[:cutoff]
 
@@ -839,6 +910,10 @@ def main():
     # Save data for dashboard
     save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
     save_briefing_history(briefing_type, analysis)
+
+    # Cleanup
+    if _yf_cookie_file and os.path.exists(_yf_cookie_file):
+        os.unlink(_yf_cookie_file)
 
 
 if __name__ == "__main__":
