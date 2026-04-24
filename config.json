@@ -1,0 +1,32 @@
+{
+  "portfolio": {
+    "NBIS": 16.70,
+    "IREN": 12.99,
+    "AMZN": 7.88,
+    "GOOG": 5.01,
+    "DLO": 4.20,
+    "CRM": 4.07,
+    "ZETA": 4.06,
+    "ORCL": 3.92,
+    "CIFR": 3.65,
+    "UNH": 3.51,
+    "NVDA": 3.46,
+    "UBER": 3.14,
+    "PGY": 2.97,
+    "JD": 2.63,
+    "MA": 2.48,
+    "NVO": 2.10,
+    "MSFT": 2.06,
+    "ACHR": 1.89,
+    "ASML": 1.75,
+    "DVN": 1.31,
+    "ELV": 1.28,
+    "NOW": 1.15,
+    "DCTH": 1.07,
+    "HROW": 0.67
+  },
+  "watchlist": [
+    "NICE", "BABA", "ASTS", "SOFI", "V", "VST",
+    "MELI", "GRAB", "OKLO", "AVGO", "INTU"
+  ]
+}
