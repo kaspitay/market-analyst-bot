@@ -48,4 +48,4 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python analyzer.py ${{ steps.briefing.type }}
+        run: python analyzer.py ${{ steps.briefing.outputs.type }}
