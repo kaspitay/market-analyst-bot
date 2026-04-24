@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Market Analyst Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-primary: #1a1a2e;
+      --bg-card: #16213e;
+      --accent: #e94560;
+      --secondary: #0f3460;
+      --text-primary: #e0e0e0;
+      --text-secondary: #a0a0b0;
+      --green: #00c853;
+      --red: #ff1744;
+      --border: #2a2a4e;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, var(--secondary), var(--bg-card));
+      padding: 20px 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid var(--accent);
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .header h1 span { color: var(--accent); }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+    .refresh-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.75rem;
+    }
+    .refresh-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Layout */
+    .dashboard {
+      padding: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+      display: grid;
+      gap: 20px;
+    }
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 20px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border-radius: 10px;
+      padding: 20px;
+      border: 1px solid var(--border);
+    }
+
+    /* Market Overview */
+    .market-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+    }
+    .market-card {
+      background: var(--bg-card);
+      border-radius: 10px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      text-align: center;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .market-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+    }
+    .market-card .label {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .market-card .price {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .market-card .change {
+      font-size: 0.9rem;
+      margin-top: 4px;
+      font-weight: 600;
+    }
+
+    /* Fear & Greed */
+    .fear-greed-container {
+      display: flex;
+      align-items: center;
+      gap: 30px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .gauge-wrapper {
+      width: 250px;
+      position: relative;
+    }
+    .gauge-score {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+    }
+    .gauge-score .number {
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: #fff;
+    }
+    .gauge-score .label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .fg-history {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .fg-history-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      font-size: 0.85rem;
+    }
+    .fg-history-item .period { color: var(--text-secondary); }
+    .fg-history-item .value { font-weight: 600; }
+
+    /* Charts row */
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 900px) {
+      .charts-row { grid-template-columns: 1fr; }
+    }
+    .chart-container {
+      position: relative;
+      max-height: 350px;
+    }
+
+    /* Tables */
+    .table-wrapper { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      color: var(--text-secondary);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th:hover { color: var(--accent); }
+    th .sort-arrow { margin-left: 4px; font-size: 0.7rem; }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tr:hover td { background: rgba(233, 69, 96, 0.05); }
+    .ticker-cell {
+      font-weight: 700;
+      color: #fff;
+    }
+
+    /* Earnings */
+    .earnings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .earning-card {
+      background: var(--bg-primary);
+      border-radius: 8px;
+      padding: 14px;
+      border: 1px solid var(--border);
+    }
+    .earning-card .date {
+      font-size: 0.75rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .earning-card .ticker {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+      margin: 4px 0;
+    }
+    .earning-card .details {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    /* Briefings */
+    .briefing-card {
+      background: var(--bg-primary);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .briefing-header {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .briefing-header:hover { background: rgba(233, 69, 96, 0.08); }
+    .briefing-meta {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .briefing-date {
+      font-size: 0.8rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .briefing-type {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: var(--secondary);
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+    .briefing-toggle {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      transition: transform 0.2s;
+    }
+    .briefing-content {
+      display: none;
+      padding: 0 16px 14px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+    .briefing-card.open .briefing-content { display: block; }
+    .briefing-card.open .briefing-toggle { transform: rotate(180deg); }
+
+    /* Loading / Empty */
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-state {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 30px;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 30px;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .header { padding: 15px; }
+      .header h1 { font-size: 1.2rem; }
+      .dashboard { padding: 12px; }
+      .card { padding: 14px; }
+      .market-card .price { font-size: 1.2rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <h1>Market Analyst <span>Dashboard</span></h1>
+    <div class="header-right">
+      <div id="datetime"></div>
+      <div class="refresh-indicator">
+        <div class="refresh-dot"></div>
+        <span>Live</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="dashboard">
+
+    <!-- Market Overview -->
+    <div>
+      <div class="section-title">Market Overview</div>
+      <div class="market-row" id="market-overview">
+        <div class="market-card" id="card-spy">
+          <div class="label">S&P 500</div>
+          <div class="price"><span class="spinner"></span></div>
+          <div class="change"></div>
+        </div>
+        <div class="market-card" id="card-dia">
+          <div class="label">Dow Jones</div>
+          <div class="price"><span class="spinner"></span></div>
+          <div class="change"></div>
+        </div>
+        <div class="market-card" id="card-qqq">
+          <div class="label">NASDAQ</div>
+          <div class="price"><span class="spinner"></span></div>
+          <div class="change"></div>
+        </div>
+        <div class="market-card" id="card-vix">
+          <div class="label">VIX</div>
+          <div class="price"><span class="spinner"></span></div>
+          <div class="change"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fear & Greed + Portfolio Donut -->
+    <div class="charts-row">
+      <div class="card">
+        <div class="section-title">Fear & Greed Index</div>
+        <div id="fg-container" class="fear-greed-container">
+          <div class="loading-state"><span class="spinner"></span> Loading...</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-title">Portfolio Allocation</div>
+        <div class="chart-container">
+          <canvas id="allocationChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Holdings Table -->
+    <div class="card">
+      <div class="section-title">Portfolio Holdings</div>
+      <div class="table-wrapper">
+        <table id="holdings-table">
+          <thead>
+            <tr>
+              <th data-sort="ticker">Ticker <span class="sort-arrow"></span></th>
+              <th data-sort="allocation">Allocation % <span class="sort-arrow"></span></th>
+              <th data-sort="price">Price <span class="sort-arrow"></span></th>
+              <th data-sort="change">Daily Change % <span class="sort-arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body">
+            <tr><td colspan="4"><div class="loading-state"><span class="spinner"></span> Loading...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Watchlist Table -->
+    <div class="card">
+      <div class="section-title">Watchlist</div>
+      <div class="table-wrapper">
+        <table id="watchlist-table">
+          <thead>
+            <tr>
+              <th data-sort="ticker">Ticker <span class="sort-arrow"></span></th>
+              <th data-sort="price">Price <span class="sort-arrow"></span></th>
+              <th data-sort="change">Daily Change % <span class="sort-arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="watchlist-body">
+            <tr><td colspan="3"><div class="loading-state"><span class="spinner"></span> Loading...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Earnings Calendar -->
+    <div class="card">
+      <div class="section-title">Upcoming Earnings (Next 14 Days)</div>
+      <div id="earnings-container">
+        <div class="loading-state"><span class="spinner"></span> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Briefing History -->
+    <div class="card">
+      <div class="section-title">Briefing History</div>
+      <div id="briefings-container">
+        <div class="loading-state"><span class="spinner"></span> Loading...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Config (API keys) loaded from separate file -->
+  <script src="config.js"></script>
+
+  <script>
+    // ─── Portfolio Data ─────────────────────────────────────────
+    const PORTFOLIO = {
+      "NBIS": 16.70, "IREN": 12.99, "AMZN": 7.88, "GOOG": 5.01,
+      "DLO": 4.20, "CRM": 4.07, "ZETA": 4.06, "ORCL": 3.92,
+      "CIFR": 3.65, "UNH": 3.51, "NVDA": 3.46, "UBER": 3.14,
+      "PGY": 2.97, "JD": 2.63, "MA": 2.48, "NVO": 2.10,
+      "MSFT": 2.06, "ACHR": 1.89, "ASML": 1.75, "DVN": 1.31,
+      "ELV": 1.28, "NOW": 1.15, "DCTH": 1.07, "HROW": 0.67
+    };
+    const WATCHLIST = ["NICE", "BABA", "ASTS", "SOFI", "V", "VST", "MELI", "GRAB", "OKLO", "AVGO", "INTU"];
+    const MARKET_INDICES = [
+      { symbol: "SPY", label: "S&P 500", id: "card-spy" },
+      { symbol: "DIA", label: "Dow Jones", id: "card-dia" },
+      { symbol: "QQQ", label: "NASDAQ", id: "card-qqq" },
+      { symbol: "VIX", label: "VIX", id: "card-vix" }
+    ];
+
+    function getApiKey() {
+      if (typeof CONFIG !== 'undefined' && CONFIG.FINNHUB_API_KEY) {
+        return CONFIG.FINNHUB_API_KEY;
+      }
+      console.warn('CONFIG.FINNHUB_API_KEY not found. Create docs/config.js from config.example.js');
+      return null;
+    }
+
+    // ─── Utility Functions ──────────────────────────────────────
+    function fmt(n, decimals = 2) {
+      if (n == null || isNaN(n)) return '\u2014';
+      return Number(n).toFixed(decimals);
+    }
+
+    function fmtPrice(n) {
+      if (n == null || isNaN(n) || n === 0) return '\u2014';
+      return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function changeColor(val) {
+      if (val > 0) return 'var(--green)';
+      if (val < 0) return 'var(--red)';
+      return 'var(--text-secondary)';
+    }
+
+    function fgColor(score) {
+      if (score <= 25) return '#ff1744';
+      if (score <= 45) return '#ff6d00';
+      if (score <= 55) return '#ffd600';
+      if (score <= 75) return '#aeea00';
+      return '#00c853';
+    }
+
+    function fgLabel(score) {
+      if (score <= 25) return 'Extreme Fear';
+      if (score <= 45) return 'Fear';
+      if (score <= 55) return 'Neutral';
+      if (score <= 75) return 'Greed';
+      return 'Extreme Greed';
+    }
+
+    function updateDateTime() {
+      const now = new Date();
+      document.getElementById('datetime').textContent = now.toLocaleString('en-US', {
+        weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+
+    // ─── Finnhub API ────────────────────────────────────────────
+    async function fetchQuote(symbol) {
+      const key = getApiKey();
+      if (!key) return null;
+      try {
+        const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${key}`);
+        if (!r.ok) return null;
+        const data = await r.json();
+        if (data.c === 0 && data.d === 0) return null;
+        return data;
+      } catch {
+        return null;
+      }
+    }
+
+    // Rate-limited batch fetch: Finnhub free tier allows 60 calls/min
+    async function fetchQuotesBatch(symbols) {
+      const results = {};
+      const batchSize = 10;
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        const promises = batch.map(async (sym) => {
+          results[sym] = await fetchQuote(sym);
+        });
+        await Promise.all(promises);
+        if (i + batchSize < symbols.length) {
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      }
+      return results;
+    }
+
+    // ─── Market Overview ────────────────────────────────────────
+    async function loadMarketOverview() {
+      for (const idx of MARKET_INDICES) {
+        const card = document.getElementById(idx.id);
+        const priceEl = card.querySelector('.price');
+        const changeEl = card.querySelector('.change');
+
+        const q = await fetchQuote(idx.symbol);
+        if (q && q.c) {
+          priceEl.textContent = fmtPrice(q.c);
+          const d = q.d || 0;
+          const dp = q.dp || 0;
+          const sign = d >= 0 ? '+' : '';
+          changeEl.textContent = `${sign}${fmt(d)} (${sign}${fmt(dp)}%)`;
+          changeEl.style.color = changeColor(d);
+        } else {
+          priceEl.textContent = '\u2014';
+          changeEl.textContent = 'Unavailable';
+          changeEl.style.color = 'var(--text-secondary)';
+        }
+      }
+    }
+
+    // ─── Fear & Greed ───────────────────────────────────────────
+    let fgChart = null;
+
+    async function loadFearGreed() {
+      const container = document.getElementById('fg-container');
+      let fgData = null;
+
+      try {
+        // Try fetching from feargreedmeter.com (likely CORS-blocked)
+        const r = await fetch('https://feargreedmeter.com', { mode: 'cors' });
+        const html = await r.text();
+        const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+        if (match) {
+          const nextData = JSON.parse(match[1]);
+          const fgi = nextData?.props?.pageProps?.fearGreedIndex || nextData?.props?.pageProps;
+          if (fgi) {
+            fgData = {
+              score: fgi.score || fgi.now?.score || fgi.fgi?.now?.value,
+              weekAgo: fgi.oneWeekAgo?.score || fgi.fgi?.oneWeekAgo?.value,
+              monthAgo: fgi.oneMonthAgo?.score || fgi.fgi?.oneMonthAgo?.value
+            };
+          }
+        }
+      } catch {
+        // CORS blocked - expected
+      }
+
+      // Fallback: try alternative API
+      if (!fgData) {
+        try {
+          const r = await fetch('https://production.dataviz.cnn.io/index/fearandgreed/graphdata');
+          const data = await r.json();
+          if (data && data.fear_and_greed) {
+            fgData = {
+              score: Math.round(data.fear_and_greed.score),
+              weekAgo: Math.round(data.fear_and_greed_historical?.previousOneWeek?.score || 0),
+              monthAgo: Math.round(data.fear_and_greed_historical?.previousOneMonth?.score || 0)
+            };
+          }
+        } catch {
+          // Also blocked
+        }
+      }
+
+      if (!fgData || !fgData.score) {
+        container.innerHTML = '<div class="empty-state">Fear & Greed data unavailable (CORS restriction)</div>';
+        return;
+      }
+
+      const score = fgData.score;
+      container.innerHTML = `
+        <div class="gauge-wrapper">
+          <canvas id="fgGauge"></canvas>
+          <div class="gauge-score">
+            <div class="number">${score}</div>
+            <div class="label" style="color:${fgColor(score)}">${fgLabel(score)}</div>
+          </div>
+        </div>
+        <div class="fg-history">
+          <div class="fg-history-item">
+            <span class="period">Now</span>
+            <span class="value" style="color:${fgColor(score)}">${score} - ${fgLabel(score)}</span>
+          </div>
+          ${fgData.weekAgo ? `<div class="fg-history-item">
+            <span class="period">1 Week Ago</span>
+            <span class="value" style="color:${fgColor(fgData.weekAgo)}">${fgData.weekAgo} - ${fgLabel(fgData.weekAgo)}</span>
+          </div>` : ''}
+          ${fgData.monthAgo ? `<div class="fg-history-item">
+            <span class="period">1 Month Ago</span>
+            <span class="value" style="color:${fgColor(fgData.monthAgo)}">${fgData.monthAgo} - ${fgLabel(fgData.monthAgo)}</span>
+          </div>` : ''}
+        </div>
+      `;
+
+      // Draw gauge
+      const ctx = document.getElementById('fgGauge').getContext('2d');
+      if (fgChart) fgChart.destroy();
+      fgChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          datasets: [{
+            data: [score, 100 - score],
+            backgroundColor: [fgColor(score), 'rgba(255,255,255,0.05)'],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          circumference: 180,
+          rotation: -90,
+          cutout: '75%',
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } }
+        }
+      });
+    }
+
+    // ─── Portfolio Allocation Chart ─────────────────────────────
+    let allocationChart = null;
+
+    function renderAllocationChart() {
+      const sorted = Object.entries(PORTFOLIO).sort((a, b) => b[1] - a[1]);
+      const top10 = sorted.slice(0, 10);
+      const others = sorted.slice(10);
+      const otherTotal = others.reduce((s, [, v]) => s + v, 0);
+
+      const labels = [...top10.map(([t]) => t), 'Other'];
+      const data = [...top10.map(([, v]) => v), otherTotal];
+
+      const colors = [
+        '#e94560', '#0f3460', '#00c853', '#ffd600', '#2196f3',
+        '#ff6d00', '#ab47bc', '#26a69a', '#ec407a', '#78909c',
+        '#546e7a'
+      ];
+
+      const ctx = document.getElementById('allocationChart').getContext('2d');
+      if (allocationChart) allocationChart.destroy();
+      allocationChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: data,
+            backgroundColor: colors,
+            borderColor: 'var(--bg-card)',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          cutout: '55%',
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: {
+                color: '#e0e0e0',
+                font: { size: 11 },
+                padding: 8,
+                usePointStyle: true,
+                pointStyleWidth: 10
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  const label = ctx.label || '';
+                  const val = ctx.parsed;
+                  if (label === 'Other') {
+                    const otherTickers = others.map(([t, v]) => `${t}: ${fmt(v)}%`).join(', ');
+                    return `Other: ${fmt(val)}% (${otherTickers})`;
+                  }
+                  return `${label}: ${fmt(val)}%`;
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ─── Holdings Table ─────────────────────────────────────────
+    let holdingsData = [];
+    let holdingsSort = { key: 'allocation', asc: false };
+
+    async function loadHoldings() {
+      const tickers = Object.keys(PORTFOLIO);
+      const quotes = await fetchQuotesBatch(tickers);
+
+      holdingsData = tickers.map(ticker => ({
+        ticker,
+        allocation: PORTFOLIO[ticker],
+        price: quotes[ticker]?.c || null,
+        change: quotes[ticker]?.dp || null
+      }));
+
+      renderHoldings();
+    }
+
+    function renderHoldings() {
+      const sorted = [...holdingsData].sort((a, b) => {
+        let va = a[holdingsSort.key], vb = b[holdingsSort.key];
+        if (va == null) va = -Infinity;
+        if (vb == null) vb = -Infinity;
+        return holdingsSort.asc ? va - vb : vb - va;
+      });
+
+      const tbody = document.getElementById('holdings-body');
+      tbody.innerHTML = sorted.map(row => `
+        <tr>
+          <td class="ticker-cell">${row.ticker}</td>
+          <td>${fmt(row.allocation)}%</td>
+          <td>${fmtPrice(row.price)}</td>
+          <td style="color:${changeColor(row.change)};font-weight:600">
+            ${row.change != null ? (row.change >= 0 ? '+' : '') + fmt(row.change) + '%' : '\u2014'}
+          </td>
+        </tr>
+      `).join('');
+
+      // Update sort arrows
+      document.querySelectorAll('#holdings-table th').forEach(th => {
+        const key = th.dataset.sort;
+        const arrow = th.querySelector('.sort-arrow');
+        if (key === holdingsSort.key) {
+          arrow.textContent = holdingsSort.asc ? '\u25B2' : '\u25BC';
+        } else {
+          arrow.textContent = '';
+        }
+      });
+    }
+
+    document.querySelectorAll('#holdings-table th').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (holdingsSort.key === key) {
+          holdingsSort.asc = !holdingsSort.asc;
+        } else {
+          holdingsSort.key = key;
+          holdingsSort.asc = key === 'ticker';
+        }
+        renderHoldings();
+      });
+    });
+
+    // ─── Watchlist Table ────────────────────────────────────────
+    let watchlistData = [];
+    let watchlistSort = { key: 'ticker', asc: true };
+
+    async function loadWatchlist() {
+      const quotes = await fetchQuotesBatch(WATCHLIST);
+
+      watchlistData = WATCHLIST.map(ticker => ({
+        ticker,
+        price: quotes[ticker]?.c || null,
+        change: quotes[ticker]?.dp || null
+      }));
+
+      renderWatchlist();
+    }
+
+    function renderWatchlist() {
+      const sorted = [...watchlistData].sort((a, b) => {
+        let va = a[watchlistSort.key], vb = b[watchlistSort.key];
+        if (watchlistSort.key === 'ticker') {
+          return watchlistSort.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+        }
+        if (va == null) va = -Infinity;
+        if (vb == null) vb = -Infinity;
+        return watchlistSort.asc ? va - vb : vb - va;
+      });
+
+      const tbody = document.getElementById('watchlist-body');
+      tbody.innerHTML = sorted.map(row => `
+        <tr>
+          <td class="ticker-cell">${row.ticker}</td>
+          <td>${fmtPrice(row.price)}</td>
+          <td style="color:${changeColor(row.change)};font-weight:600">
+            ${row.change != null ? (row.change >= 0 ? '+' : '') + fmt(row.change) + '%' : '\u2014'}
+          </td>
+        </tr>
+      `).join('');
+
+      document.querySelectorAll('#watchlist-table th').forEach(th => {
+        const key = th.dataset.sort;
+        const arrow = th.querySelector('.sort-arrow');
+        if (key === watchlistSort.key) {
+          arrow.textContent = watchlistSort.asc ? '\u25B2' : '\u25BC';
+        } else {
+          arrow.textContent = '';
+        }
+      });
+    }
+
+    document.querySelectorAll('#watchlist-table th').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (watchlistSort.key === key) {
+          watchlistSort.asc = !watchlistSort.asc;
+        } else {
+          watchlistSort.key = key;
+          watchlistSort.asc = key === 'ticker';
+        }
+        renderWatchlist();
+      });
+    });
+
+    // ─── Earnings Calendar ──────────────────────────────────────
+    async function loadEarnings() {
+      const container = document.getElementById('earnings-container');
+      const key = getApiKey();
+      if (!key) {
+        container.innerHTML = '<div class="empty-state">API key not configured</div>';
+        return;
+      }
+
+      try {
+        const today = new Date();
+        const future = new Date(today);
+        future.setDate(future.getDate() + 14);
+        const from = today.toISOString().split('T')[0];
+        const to = future.toISOString().split('T')[0];
+
+        const r = await fetch(`https://finnhub.io/api/v1/calendar/earnings?from=${from}&to=${to}&token=${key}`);
+        if (!r.ok) throw new Error('API error');
+        const data = await r.json();
+
+        const allTickers = new Set([...Object.keys(PORTFOLIO), ...WATCHLIST]);
+        const filtered = (data.earningsCalendar || []).filter(e => allTickers.has(e.symbol));
+
+        if (filtered.length === 0) {
+          container.innerHTML = '<div class="empty-state">No earnings scheduled for portfolio/watchlist tickers in the next 14 days</div>';
+          return;
+        }
+
+        filtered.sort((a, b) => a.date.localeCompare(b.date));
+        container.innerHTML = `<div class="earnings-grid">${filtered.map(e => `
+          <div class="earning-card">
+            <div class="date">${new Date(e.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+            <div class="ticker">${e.symbol}</div>
+            <div class="details">
+              EPS Est: ${e.epsEstimate != null ? '$' + fmt(e.epsEstimate) : '\u2014'}
+              &middot; ${e.hour === 'bmo' ? 'Before Market' : e.hour === 'amc' ? 'After Market' : e.hour || '\u2014'}
+              ${e.revenueEstimate ? ' &middot; Rev Est: $' + (e.revenueEstimate / 1e9).toFixed(1) + 'B' : ''}
+            </div>
+          </div>
+        `).join('')}</div>`;
+      } catch {
+        container.innerHTML = '<div class="empty-state">Unable to load earnings data</div>';
+      }
+    }
+
+    // ─── Briefing History ───────────────────────────────────────
+    async function loadBriefings() {
+      const container = document.getElementById('briefings-container');
+      try {
+        const r = await fetch('data/briefings.jsonl');
+        if (!r.ok) throw new Error('Not found');
+        const text = await r.text();
+        const lines = text.trim().split('\n').filter(l => l.trim());
+        if (lines.length === 0) throw new Error('Empty');
+
+        const briefings = lines.map(l => {
+          try { return JSON.parse(l); } catch { return null; }
+        }).filter(Boolean);
+
+        const recent = briefings.slice(-10).reverse();
+
+        container.innerHTML = recent.map((b, i) => `
+          <div class="briefing-card${i === 0 ? ' open' : ''}">
+            <div class="briefing-header" onclick="this.parentElement.classList.toggle('open')">
+              <div class="briefing-meta">
+                <span class="briefing-date">${b.date || 'Unknown date'}</span>
+                <span class="briefing-type">${b.type || 'briefing'}</span>
+              </div>
+              <span class="briefing-toggle">\u25BC</span>
+            </div>
+            <div class="briefing-content">${escapeHtml(b.content || '')}</div>
+          </div>
+        `).join('');
+      } catch {
+        container.innerHTML = '<div class="empty-state">No briefings yet</div>';
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ─── Initialize ─────────────────────────────────────────────
+    async function init() {
+      updateDateTime();
+      setInterval(updateDateTime, 1000);
+
+      renderAllocationChart();
+
+      // Load data in parallel groups to manage rate limits
+      loadMarketOverview();
+      loadFearGreed();
+      loadEarnings();
+      loadBriefings();
+
+      // Stagger table loads to stay within API rate limits
+      await loadHoldings();
+      await loadWatchlist();
+    }
+
+    async function refresh() {
+      loadMarketOverview();
+      loadFearGreed();
+      loadEarnings();
+      loadBriefings();
+      await loadHoldings();
+      await loadWatchlist();
+    }
+
+    init();
+    setInterval(refresh, 60000);
+  </script>
+</body>
+</html>

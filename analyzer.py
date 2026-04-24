@@ -4,7 +4,7 @@ import json
 import subprocess
 import time
 import requests
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 
 def load_config():
@@ -96,6 +96,71 @@ def fetch_vix():
         return None
 
 
+def compute_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def fetch_technicals(ticker):
+    """Fetch price history from Yahoo Finance and compute RSI, SMA 50, SMA 200, current price."""
+    try:
+        data = curl_json(
+            f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1y"
+        )
+        result = data["chart"]["result"][0]
+        meta = result["meta"]
+        closes = result["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+
+        current = meta["regularMarketPrice"]
+        prev_close = meta["chartPreviousClose"]
+        change_pct = round((current - prev_close) / prev_close * 100, 2) if prev_close else 0
+
+        rsi = compute_rsi(closes)
+        sma50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
+        sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
+
+        # Price vs SMAs
+        signals = []
+        if sma50 and current > sma50:
+            signals.append("above SMA50")
+        elif sma50:
+            signals.append("below SMA50")
+        if sma200 and current > sma200:
+            signals.append("above SMA200")
+        elif sma200:
+            signals.append("below SMA200")
+        if sma50 and sma200:
+            if sma50 > sma200:
+                signals.append("golden cross")
+            else:
+                signals.append("death cross")
+
+        return {
+            "price": current,
+            "change_pct": change_pct,
+            "rsi": rsi,
+            "sma50": sma50,
+            "sma200": sma200,
+            "signals": signals,
+        }
+    except Exception as e:
+        print(f"Warning: failed to fetch technicals for {ticker}: {e}")
+        return None
+
+
 def fetch_earnings(tickers, api_key):
     try:
         today = date.today()
@@ -125,7 +190,7 @@ def fetch_earnings(tickers, api_key):
         return []
 
 
-def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, briefing_type):
+def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type):
     today_str = date.today().strftime("%B %d, %Y")
 
     if briefing_type == "pre-market":
@@ -172,6 +237,17 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     port_text = "\n## Current Portfolio Allocation\n"
     for ticker, pct in sorted(portfolio.items(), key=lambda x: -x[1]):
         port_text += f"- {ticker}: {pct}%\n"
+
+    # Build technical analysis data
+    tech_text = "\n## Technical Indicators\n"
+    for ticker, tech in technicals.items():
+        if tech:
+            rsi_str = f"RSI={tech['rsi']}" if tech["rsi"] else "RSI=N/A"
+            sma50_str = f"SMA50=${tech['sma50']}" if tech["sma50"] else "SMA50=N/A"
+            sma200_str = f"SMA200=${tech['sma200']}" if tech["sma200"] else "SMA200=N/A"
+            signals = ", ".join(tech["signals"]) if tech["signals"] else "no signals"
+            alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
+            tech_text += f"- {ticker}{alloc}: ${tech['price']} ({tech['change_pct']:+.2f}%) | {rsi_str} | {sma50_str} | {sma200_str} | {signals}\n"
 
     # Build news sections
     news_text = "\n## General Market News\n"
@@ -224,31 +300,43 @@ Structure your message EXACTLY in this order:
 4. <b>\U0001f4b0 ECONOMIC CALENDAR</b>
    List key upcoming economic events (Fed meetings, GDP, CPI, employment).
 
-5. <b>\U0001f4bc PORTFOLIO PULSE</b>
+5. <b>\U0001f4c8 TECHNICAL SNAPSHOT</b>
+   Highlight the most notable technical signals from the data:
+   - Stocks with RSI > 70 (overbought) or RSI < 30 (oversold) \u2014 these are key signals
+   - Golden crosses or death crosses
+   - Stocks significantly above/below their SMA200
+   Keep it brief \u2014 only mention tickers with actionable signals.
+
+6. <b>\U0001f4bc PORTFOLIO PULSE</b>
    Only tickers with meaningful news. Show ticker, allocation %, news summary, impact.
    Use \U0001f7e2 bullish / \U0001f534 bearish / \u26aa neutral.
 
-6. <b>\U0001f440 WATCHLIST RADAR</b>
+7. <b>\U0001f440 WATCHLIST RADAR</b>
    News for watchlist tickers (not held). Flag any that look like good entry points.
 
-7. <b>\U0001f4a1 RECOMMENDATIONS</b>
-   This is the MOST IMPORTANT section. Based on ALL the data:
-   - \U0001f7e2 <b>BUY/ADD</b>: Which tickers to buy or add to, and WHY (1-2 sentences each)
+8. <b>\U0001f4a1 RECOMMENDATIONS</b>
+   This is the MOST IMPORTANT section. Based on ALL the data (news + technicals + sentiment):
+   - \U0001f7e2 <b>BUY/ADD</b>: Which tickers to buy or add to, and WHY (combine news + technical signals)
    - \U0001f7e1 <b>HOLD</b>: Which to hold steady, and WHY
    - \U0001f534 <b>SELL/REDUCE</b>: Which to consider selling or trimming, and WHY
-   - Only include tickers where there's a clear signal from today's news. Skip the rest.
+   - Only include tickers where there's a clear signal. Skip the rest.
    - Consider the portfolio allocation \u2014 if a position is already large (>10%), be cautious about recommending more.
    - Include watchlist tickers if there's a good entry signal.
+   - Use RSI levels to support your recommendations (oversold = potential buy, overbought = caution).
 
-8. <b>\U0001f680 OPPORTUNITIES</b>
+9. <b>\u26a0\ufe0f RISK ALERTS</b>
+   Flag any concentration risks (positions >10%), correlated positions moving together,
+   or death cross signals that need attention.
+
+10. <b>\U0001f680 OPPORTUNITIES</b>
    Suggest 1-3 stocks or sectors NOT in the portfolio or watchlist that show long-term potential.
    Brief explanation of why each is interesting.
 
-9. <b>\U0001f30d MARKET OUTLOOK</b>
+11. <b>\U0001f30d MARKET OUTLOOK</b>
    2-3 sentences on overall sentiment and what to watch {time_context}.
 
 Data:
-{ind_text}{earn_text}{port_text}{news_text}"""
+{ind_text}{earn_text}{port_text}{tech_text}{news_text}"""
 
 
 def analyze(prompt):
@@ -265,17 +353,51 @@ def analyze(prompt):
 
 
 def send_telegram(text, bot_token, chat_id):
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST",
-         f"https://api.telegram.org/bot{bot_token}/sendMessage",
-         "-d", f"chat_id={chat_id}",
-         "-d", "parse_mode=HTML",
-         "--data-urlencode", f"text={text}"],
-        capture_output=True, text=True, timeout=15,
-    )
-    resp = json.loads(result.stdout)
-    if not resp.get("ok"):
-        raise RuntimeError(f"Telegram error: {resp}")
+    # Telegram max is 4096 chars. Split on section headers if too long.
+    chunks = []
+    if len(text) <= 4000:
+        chunks = [text]
+    else:
+        lines = text.split("\n")
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 4000 and chunk:
+                chunks.append(chunk)
+                chunk = line
+            else:
+                chunk = chunk + "\n" + line if chunk else line
+        if chunk:
+            chunks.append(chunk)
+
+    for i, chunk in enumerate(chunks):
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST",
+             f"https://api.telegram.org/bot{bot_token}/sendMessage",
+             "-d", f"chat_id={chat_id}",
+             "-d", "parse_mode=HTML",
+             "--data-urlencode", f"text={chunk}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        resp = json.loads(result.stdout)
+        if not resp.get("ok"):
+            raise RuntimeError(f"Telegram error: {resp}")
+        if i < len(chunks) - 1:
+            time.sleep(0.5)
+
+
+def save_briefing_history(briefing_type, content):
+    """Append briefing to JSONL history file for the dashboard."""
+    data_dir = os.path.join(os.path.dirname(__file__), "docs", "data")
+    os.makedirs(data_dir, exist_ok=True)
+    filepath = os.path.join(data_dir, "briefings.jsonl")
+    entry = {
+        "date": date.today().isoformat(),
+        "type": briefing_type,
+        "content": content,
+    }
+    with open(filepath, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    print(f"Briefing saved to history ({filepath})")
 
 
 def main():
@@ -295,6 +417,13 @@ def main():
     fg_data = fetch_fear_greed_data()
     vix = fetch_vix()
     earnings = fetch_earnings(all_tickers, finnhub_key)
+
+    # Fetch technical indicators for all tickers
+    print("Fetching technical indicators...")
+    technicals = {}
+    for ticker in all_tickers:
+        technicals[ticker] = fetch_technicals(ticker)
+        time.sleep(0.3)  # Rate limit Yahoo Finance
 
     # Fetch news for portfolio holdings
     portfolio_news = {}
@@ -321,12 +450,15 @@ def main():
         indicators["calendar"] = fg_data["calendar"]
     prompt = build_prompt(
         portfolio_news, watchlist_news, market_news,
-        indicators, earnings, portfolio, watchlist, briefing_type,
+        indicators, earnings, portfolio, watchlist, technicals, briefing_type,
     )
     analysis = analyze(prompt)
 
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")
+
+    # Save briefing history for dashboard
+    save_briefing_history(briefing_type, analysis)
 
 
 if __name__ == "__main__":
