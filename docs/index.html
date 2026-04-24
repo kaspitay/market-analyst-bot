@@ -92,10 +92,36 @@
     .range-marker { position: absolute; top: -4px; width: 14px; height: 14px; background: #e94560; border-radius: 50%; transform: translateX(-50%); border: 2px solid #0f0f1a; }
     .range-labels { display: flex; justify-content: space-between; font-size: 11px; color: #666; }
     .detail-wrapper { max-height: 0; overflow: hidden; transition: max-height 0.35s ease-out, opacity 0.25s ease-out; opacity: 0; }
-    .detail-row.open .detail-wrapper { max-height: 600px; opacity: 1; }
+    .detail-row.open .detail-wrapper { max-height: 1200px; opacity: 1; }
     .pt-upside { font-weight: 600; }
     .pt-upside.green { color: #00c853; }
     .pt-upside.red { color: #ff1744; }
+    .detail-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .detail-tab { padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; border: 1px solid #2a2a4a; color: #888; background: transparent; }
+    .detail-tab.active { background: #e94560; color: #fff; border-color: #e94560; }
+    .dtab { display: none; }
+    .dtab.active { display: block; }
+    .fund-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px; }
+    .fund-section h4 { font-size: 11px; color: #e94560; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .fund-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #1f1f3a; }
+    .fund-row .fl { color: #888; }
+    .fg { color: #00c853; } .fw { color: #ffd600; } .fb { color: #ff1744; }
+    .calc-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+    .calc-tab { padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; border: 1px solid #2a2a4a; color: #888; background: transparent; }
+    .calc-tab.active { background: #533483; color: #fff; border-color: #533483; }
+    .calc-model { display: none; }
+    .calc-model.active { display: block; }
+    .slider-row { margin: 8px 0; }
+    .slider-row label { display: flex; justify-content: space-between; font-size: 12px; color: #888; margin-bottom: 2px; }
+    .slider-row label span { color: #fff; font-weight: 600; }
+    .slider-row input[type="range"] { width: 100%; accent-color: #e94560; height: 4px; }
+    .calc-result { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; margin-top: 10px; text-align: center; }
+    .calc-price { font-size: 28px; font-weight: 700; color: #fff; }
+    .calc-upside { font-size: 14px; margin-top: 4px; }
+    .calc-chart-wrap { height: 100px; margin-top: 8px; }
+    .scores-row { display: flex; gap: 12px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+    .score-item { font-size: 11px; color: #888; }
+    .score-item b { color: #fff; }
     @media (max-width: 900px) {
       .grid-4 { grid-template-columns: repeat(2, 1fr); }
       .grid-2 { grid-template-columns: 1fr; }
@@ -144,11 +170,26 @@
         <dt>Fear & Greed Index</dt>
         <dd>Market sentiment on a 0-100 scale. <b>0-25</b> = Extreme Fear (investors are very worried — often a buying opportunity). <b>75-100</b> = Extreme Greed (investors are overconfident — often a signal to be cautious).</dd>
 
-        <dt>Analyst Price Target</dt>
-        <dd>Consensus price target from Wall Street analysts. Shows mean target and upside/downside from current price. <b>Green</b> = upside potential. <b>Red</b> = downside risk. Low analyst coverage (&lt;5) reduces confidence.</dd>
+        <dt>Bollinger Bands</dt>
+        <dd>Volatility bands around a 20-day SMA (upper/lower = 2 standard deviations). Price touching the <b>lower band</b> = oversold. <b>Upper band</b> = overbought. Independent from RSI — captures volatility-based signals.</dd>
 
-        <dt>Recommendation (Algorithm-Based)</dt>
-        <dd>A composite 0-100 score based on 5 components: Moving Averages (22%), Oscillators (36%), Volume (18%), Trend Strength (14%), and Analyst Price Targets (10%). Ranges from <b>Strong Buy</b> (70+) to <b>Strong Sell</b> (&lt;30). This is a mechanical signal, not financial advice — always combine with your own research.</dd>
+        <dt>OBV (On-Balance Volume)</dt>
+        <dd>Cumulative volume indicator. If price rises but OBV falls = <b>bearish divergence</b> (smart money selling). If price falls but OBV rises = <b>bullish divergence</b> (accumulation).</dd>
+
+        <dt>Analyst Price Target</dt>
+        <dd>Consensus price target from Wall Street analysts. Shows mean target and upside/downside from current price. <b>Green</b> = upside potential. <b>Red</b> = downside risk.</dd>
+
+        <dt>Technical Score (0-100)</dt>
+        <dd>Pure technical analysis: Moving Averages (25%), Oscillators incl. RSI/MACD/Stochastic/BB (40%), Volume incl. MFI/OBV (20%), Trend Strength/ADX (15%).</dd>
+
+        <dt>Fundamental Score (0-100)</dt>
+        <dd>Fundamental analysis: Valuation/P/E/PEG (25%), Profitability/margins/ROE (20%), Growth/revenue+earnings (20%), Financial Health/debt/FCF (15%), Analyst Price Targets (20%).</dd>
+
+        <dt>Combined Score &amp; Recommendation</dt>
+        <dd>Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b> (biased toward long-term investing). Ranges from <b>Strong Buy</b> (70+) to <b>Strong Sell</b> (&lt;30). Not financial advice.</dd>
+
+        <dt>5-Year Price Calculator</dt>
+        <dd>Three models to project fair value: <b>EPS Growth</b> (earnings × P/E), <b>Revenue Growth</b> (revenue × P/S), <b>DCF</b> (discounted cash flow). Adjust sliders to test assumptions. All calculations use analyst estimates as defaults.</dd>
       </dl>
     </div>
 
@@ -357,8 +398,8 @@ function renderCalendar() {
 }
 
 function signalTag(signal) {
-  const bullish = ['above SMA50', 'above SMA200', 'golden cross', 'oversold', 'MACD bullish'];
-  const bearish = ['below SMA50', 'below SMA200', 'death cross', 'overbought', 'MACD bearish'];
+  const bullish = ['above SMA50', 'above SMA200', 'golden cross', 'oversold', 'MACD bullish', 'BB oversold', 'OBV bullish divergence'];
+  const bearish = ['below SMA50', 'below SMA200', 'death cross', 'overbought', 'MACD bearish', 'BB overbought', 'OBV bearish divergence'];
   const isBull = bullish.includes(signal);
   const isBear = bearish.includes(signal);
   const cls = isBull ? 'signal-bullish' : isBear ? 'signal-bearish' : 'signal-neutral';
@@ -423,7 +464,7 @@ function renderTickers() {
       case 5: va = ta.rsi || 0; vb = tb.rsi || 0; break;
       case 6: va = ta.sma50 || 0; vb = tb.sma50 || 0; break;
       case 7: va = ta.sma200 || 0; vb = tb.sma200 || 0; break;
-      case 8: va = ta.score || 0; vb = tb.score || 0; break;
+      case 8: va = ta.combined_score || ta.score || 0; vb = tb.combined_score || tb.score || 0; break;
       default: va = a.allocation || 0; vb = b.allocation || 0;
     }
     if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -450,54 +491,107 @@ function renderTickers() {
       <td>${rsiBadge(t.rsi)}</td>
       <td>${sma50}</td>
       <td>${sma200}</td>
-      <td>${recTag(t.recommendation)}${scoreBar(t.score)}</td>
+      <td>${recTag(t.recommendation)}${scoreBar(t.combined_score ?? t.score)}</td>
       <td>${signals}</td>
     </tr>`;
 
-    // Detail row
+    // Detail row data
     const h52 = t.high_52w ? '$' + t.high_52w.toFixed(2) : '—';
     const l52 = t.low_52w ? '$' + t.low_52w.toFixed(2) : '—';
     const rangePct = (t.high_52w && t.low_52w && t.high_52w !== t.low_52w) ? ((t.price - t.low_52w) / (t.high_52w - t.low_52w) * 100).toFixed(1) : null;
     const reasons = (t.score_reasons || []).map(r => `<div style="padding:2px 0">\u2022 ${r}</div>`).join('');
-
-    // Price target data
     const ptMean = t.target_mean ? '$' + t.target_mean.toFixed(2) : '—';
     const ptHigh = t.target_high ? '$' + t.target_high.toFixed(2) : '—';
     const ptLow = t.target_low ? '$' + t.target_low.toFixed(2) : '—';
     const ptUpside = (t.target_mean && t.price) ? ((t.target_mean - t.price) / t.price * 100) : null;
     const ptUpsideStr = ptUpside != null ? `(${ptUpside > 0 ? '+' : ''}${ptUpside.toFixed(1)}%)` : '';
     const ptUpsideCls = ptUpside > 0 ? 'green' : ptUpside < 0 ? 'red' : 'neutral';
+    const f = t.fundamentals || {};
+    const techSc = t.tech_score ?? t.score ?? 0;
+    const fundSc = t.fund_score ?? 0;
+    const combSc = t.combined_score ?? t.score ?? 0;
 
     html += `<tr class="detail-row" id="detail-${e.ticker}"><td colspan="10">
       <div class="detail-wrapper" style="padding:0 16px">
-      <div class="detail-content" style="padding:16px 0">
+      <div style="padding:16px 0">
+      <!-- TABS -->
+      <div class="detail-tabs">
+        <button class="detail-tab active" onclick="switchDTab('${e.ticker}','chart',this)">Chart & Indicators</button>
+        <button class="detail-tab" onclick="switchDTab('${e.ticker}','fund',this)">Fundamentals</button>
+        <button class="detail-tab" onclick="switchDTab('${e.ticker}','calc',this)">Price Calculator</button>
+      </div>
+      <!-- SCORES ROW -->
+      <div class="scores-row">
+        <span class="score-item">Technical: <b>${techSc}</b>/100 ${scoreBar(techSc)}</span>
+        <span class="score-item">Fundamental: <b>${fundSc}</b>/100 ${scoreBar(fundSc)}</span>
+        <span class="score-item" style="font-size:13px">Combined: <b style="color:${scoreColor(combSc)}">${combSc}</b>/100 ${recTag(t.recommendation)}</span>
+      </div>
+      <!-- TAB: CHART & INDICATORS -->
+      <div id="dtab-chart-${e.ticker}" class="dtab active">
+      <div class="detail-content">
         <div>
           <div class="section-label">3-Month Price Chart</div>
           <div class="detail-chart"><canvas id="chart-${e.ticker}"></canvas></div>
         </div>
         <div class="detail-info">
-          <div class="section-label">Details</div>
           <div class="row"><span class="label">Price</span><span>${price}</span></div>
           <div class="row"><span class="label">Daily Change</span>${fmtPct(t.change_pct)}</div>
           <div class="row"><span class="label">YTD Return</span>${fmtPct(t.ytd_pct)}</div>
-          <div class="row"><span class="label">RSI (14-day)</span><span class="${rsiColor(t.rsi)}">${rsi}${t.rsi > 70 ? ' — Overbought' : t.rsi < 30 ? ' — Oversold' : ''}</span></div>
-          <div class="row"><span class="label">SMA 50</span><span>${sma50}${t.sma50 && t.price > t.sma50 ? ' \u2713 above' : t.sma50 ? ' \u2717 below' : ''}</span></div>
-          <div class="row"><span class="label">SMA 200</span><span>${sma200}${t.sma200 && t.price > t.sma200 ? ' \u2713 above' : t.sma200 ? ' \u2717 below' : ''}</span></div>
-          <div class="row"><span class="label">52-Week Range</span><span>${l52} — ${h52}</span></div>
+          <div class="row"><span class="label">RSI (14)</span><span class="${rsiColor(t.rsi)}">${rsi}${t.rsi > 70 ? ' — Overbought' : t.rsi < 30 ? ' — Oversold' : ''}</span></div>
+          <div class="row"><span class="label">SMA 50</span><span>${sma50}${t.sma50 && t.price > t.sma50 ? ' \u2713' : t.sma50 ? ' \u2717' : ''}</span></div>
+          <div class="row"><span class="label">SMA 200</span><span>${sma200}${t.sma200 && t.price > t.sma200 ? ' \u2713' : t.sma200 ? ' \u2717' : ''}</span></div>
+          <div class="row"><span class="label">52W Range</span><span>${l52} — ${h52}</span></div>
           ${rangePct !== null ? `<div class="range-bar"><div class="range-track"><div class="range-marker" style="left:${rangePct}%"></div></div><div class="range-labels"><span>${l52}</span><span>${h52}</span></div></div>` : ''}
           <div class="row"><span class="label">Analyst Target</span><span class="pt-upside ${ptUpsideCls}">${ptMean} ${ptUpsideStr}</span></div>
-          ${t.target_high ? `<div class="row"><span class="label">Target Range</span><span>${ptLow} — ${ptHigh}</span></div>` : ''}
-          ${t.num_analysts ? `<div class="row"><span class="label">Analysts</span><span>${t.num_analysts}</span></div>` : ''}
           <div class="row"><span class="label">Allocation</span><span>${alloc}</span></div>
           ${e.earnings?.length ? `<div class="row"><span class="label">Next Earnings</span><span>${e.earnings[0].date} (${e.earnings[0].hour})</span></div>` : ''}
-          <div style="margin-top:12px">
-            <div class="section-label">Technical Recommendation</div>
-            <div style="margin-bottom:6px">${recTag(t.recommendation)} <span style="color:#888;font-size:12px">(score: ${t.score || 0}/100)</span></div>
-            <div class="score-reasons">${reasons || 'No signals'}</div>
-          </div>
           <div style="margin-top:8px"><div class="section-label">Signals</div>${signals || '<span style="color:#555">None</span>'}</div>
-          ${e.news?.length ? `<div style="margin-top:8px"><div class="section-label">Recent News</div>${e.news.map(n => `<div class="news-item">${n.headline}</div>`).join('')}</div>` : ''}
+          ${e.news?.length ? `<div style="margin-top:8px"><div class="section-label">News</div>${e.news.map(n => `<div class="news-item">${n.headline}</div>`).join('')}</div>` : ''}
         </div>
+      </div>
+      </div>
+      <!-- TAB: FUNDAMENTALS -->
+      <div id="dtab-fund-${e.ticker}" class="dtab">
+        <div class="fund-grid">
+          <div class="fund-section"><h4>Valuation</h4>
+            <div class="fund-row"><span class="fl">P/E (TTM)</span><span class="${fClr(f.trailingPE,[20,35])}">${fVal(f.trailingPE,'r')}</span></div>
+            <div class="fund-row"><span class="fl">Forward P/E</span><span class="${fClr(f.forwardPE,[20,30])}">${fVal(f.forwardPE,'r')}</span></div>
+            <div class="fund-row"><span class="fl">PEG Ratio</span><span class="${fClr(f.pegRatio,[1.5,2.5])}">${fVal(f.pegRatio,'r')}</span></div>
+            <div class="fund-row"><span class="fl">P/S</span><span>${fVal(f.priceToSales,'r')}</span></div>
+            <div class="fund-row"><span class="fl">P/B</span><span>${fVal(f.priceToBook,'r')}</span></div>
+            <div class="fund-row"><span class="fl">EV/EBITDA</span><span class="${fClr(f.enterpriseToEbitda,[15,25])}">${fVal(f.enterpriseToEbitda,'r')}</span></div>
+          </div>
+          <div class="fund-section"><h4>Profitability</h4>
+            <div class="fund-row"><span class="fl">Gross Margin</span><span class="${fClrH(f.grossMargins,0.3,0.15)}">${fVal(f.grossMargins,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Operating Margin</span><span class="${fClrH(f.operatingMargins,0.1,0)}">${fVal(f.operatingMargins,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Net Margin</span><span class="${fClrH(f.profitMargins,0.1,0)}">${fVal(f.profitMargins,'p')}</span></div>
+            <div class="fund-row"><span class="fl">ROE</span><span class="${fClrH(f.returnOnEquity,0.15,0.05)}">${fVal(f.returnOnEquity,'p')}</span></div>
+            <div class="fund-row"><span class="fl">ROA</span><span>${fVal(f.returnOnAssets,'p')}</span></div>
+          </div>
+          <div class="fund-section"><h4>Growth</h4>
+            <div class="fund-row"><span class="fl">Revenue Growth</span><span class="${fClrH(f.revenueGrowth,0.1,0)}">${fVal(f.revenueGrowth,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Earnings Growth</span><span class="${fClrH(f.earningsGrowth,0.1,0)}">${fVal(f.earningsGrowth,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Quarterly EPS Growth</span><span class="${fClrH(f.earningsQuarterlyGrowth,0.1,0)}">${fVal(f.earningsQuarterlyGrowth,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Current Year EPS Est</span><span class="${fClrH(f.currentYearGrowth,0.1,0)}">${fVal(f.currentYearGrowth,'p')}</span></div>
+            <div class="fund-row"><span class="fl">Next Year EPS Est</span><span class="${fClrH(f.nextYearGrowth,0.1,0)}">${fVal(f.nextYearGrowth,'p')}</span></div>
+          </div>
+          <div class="fund-section"><h4>Financial Health</h4>
+            <div class="fund-row"><span class="fl">Debt/Equity</span><span class="${fClr(f.debtToEquity,[100,200])}">${fVal(f.debtToEquity,'r')}</span></div>
+            <div class="fund-row"><span class="fl">Current Ratio</span><span class="${fClrH(f.currentRatio,1.5,1)}">${fVal(f.currentRatio,'r')}</span></div>
+            <div class="fund-row"><span class="fl">Free Cash Flow</span><span class="${f.freeCashflow > 0 ? 'fg' : 'fb'}">${fVal(f.freeCashflow,'$')}</span></div>
+            <div class="fund-row"><span class="fl">Total Cash</span><span>${fVal(f.totalCash,'$')}</span></div>
+            <div class="fund-row"><span class="fl">Total Debt</span><span>${fVal(f.totalDebt,'$')}</span></div>
+            <div class="fund-row"><span class="fl">Beta</span><span>${fVal(f.beta,'r')}</span></div>
+          </div>
+        </div>
+        <div style="margin-top:12px"><div class="section-label">Fundamental Score Reasons</div>
+          <div class="score-reasons">${(t.fund_score_reasons||[]).map(r=>'<div>\u2022 '+r+'</div>').join('')||'No data'}</div>
+        </div>
+      </div>
+      <!-- TAB: CALCULATOR -->
+      <div id="dtab-calc-${e.ticker}" class="dtab">
+        <div id="calc-${e.ticker}"><span style="color:#555">Loading calculator...</span></div>
+      </div>
       </div>
       </div>
     </td></tr>`;
@@ -579,6 +673,232 @@ function renderBriefings() {
     </div>`;
   }).join('');
   el.classList.remove('loading');
+}
+
+// --- Fundamental value formatters ---
+function fVal(v, type) {
+  if (v == null) return '—';
+  if (type === 'p') return (v * 100).toFixed(1) + '%';
+  if (type === '$') {
+    const abs = Math.abs(v);
+    if (abs >= 1e12) return (v < 0 ? '-' : '') + '$' + (abs/1e12).toFixed(1) + 'T';
+    if (abs >= 1e9) return (v < 0 ? '-' : '') + '$' + (abs/1e9).toFixed(1) + 'B';
+    if (abs >= 1e6) return (v < 0 ? '-' : '') + '$' + (abs/1e6).toFixed(0) + 'M';
+    return '$' + v.toLocaleString();
+  }
+  return typeof v === 'number' ? v.toFixed(2) : v;
+}
+function fClr(v, thresholds) { // lower is better (P/E, D/E)
+  if (v == null) return ''; return v <= thresholds[0] ? 'fg' : v <= thresholds[1] ? 'fw' : 'fb';
+}
+function fClrH(v, good, bad) { // higher is better (margins, ROE)
+  if (v == null) return ''; return v >= good ? 'fg' : v >= bad ? 'fw' : 'fb';
+}
+
+// --- Detail tab switching ---
+function switchDTab(ticker, tab, btn) {
+  document.querySelectorAll(`#detail-${ticker} .dtab`).forEach(el => el.classList.remove('active'));
+  document.querySelectorAll(`#detail-${ticker} .detail-tab`).forEach(el => el.classList.remove('active'));
+  document.getElementById(`dtab-${tab}-${ticker}`).classList.add('active');
+  btn.classList.add('active');
+  if (tab === 'calc' && !calcState[ticker]) initCalc(ticker);
+}
+
+// --- Calculator ---
+let calcState = {};
+
+function calcGuidance(f, price) {
+  // Classify the company and recommend the best model
+  const eps = f.trailingEps || 0;
+  const fpe = f.forwardPE || f.trailingPE || 0;
+  const pe = f.trailingPE || 0;
+  const revGr = f.revenueGrowth || 0;
+  const fcf = f.freeCashflow || 0;
+  const ps = f.priceToSales || 0;
+  const gm = f.grossMargins || 0;
+
+  let type, best, note;
+
+  if (eps <= 0.5 || pe > 200 || (f.forwardEps && f.forwardEps < 0)) {
+    // Pre-profit or negligible earnings
+    if (revGr > 0.3) {
+      type = 'Hyper-Growth (Pre-Profit)';
+      best = 'rev';
+      note = `High revenue growth (${(revGr*100).toFixed(0)}%) but minimal earnings. Use Revenue Growth model. Consider what P/S the stock will trade at as growth normalizes — mature SaaS trades at 5-10x, hardware at 2-5x.`;
+    } else {
+      type = 'Early Stage';
+      best = 'rev';
+      note = `Limited earnings and moderate growth. Revenue Growth is the best model available. Be conservative with assumptions — early-stage companies have high uncertainty.`;
+    }
+  } else if (fcf > 0 && pe > 0 && pe < 50 && gm > 0.3) {
+    // Profitable, cash-generating
+    type = 'Profitable & Cash-Generating';
+    best = 'eps';
+    note = `Solid earnings (P/E ${pe.toFixed(0)}) and positive FCF. All three models apply. EPS Growth is most reliable — default growth from analyst estimates, P/E from forward multiple. DCF also works well for this profile.`;
+  } else if (pe > 50 && revGr > 0.15) {
+    // High-growth, some earnings
+    type = 'High-Growth';
+    best = 'rev';
+    note = `Growing fast (${(revGr*100).toFixed(0)}% revenue) but high valuation (P/E ${pe.toFixed(0)}). EPS model works but high P/E makes it sensitive. Revenue Growth may give a clearer picture — set target P/S to where you think it normalizes.`;
+  } else if (fcf > 0) {
+    type = 'Value / Mature';
+    best = 'dcf';
+    note = `Moderate growth with positive cash flow. DCF is the most fundamental approach. EPS Growth also works well. Default discount rate of 10% is standard; adjust higher for riskier companies.`;
+  } else {
+    type = 'Mixed Profile';
+    best = 'eps';
+    note = `Standard profile. EPS Growth is the default starting point. Cross-check with Revenue Growth if earnings are volatile.`;
+  }
+
+  return { type, best, note };
+}
+
+function initCalc(ticker) {
+  const t = DATA.tickers[ticker]?.technicals;
+  const f = t?.fundamentals || {};
+  const price = t?.price || 0;
+  const eps = f.trailingEps || f.forwardEps || 0;
+  const rawEpsGr = f.currentYearGrowth || f.earningsGrowth || 0.1;
+  const epsGr = Math.max(-20, Math.min(50, rawEpsGr * 100)); // clamp to slider range
+  const rawFpe = f.forwardPE || f.trailingPE || 15;
+  const fpe = Math.max(5, Math.min(60, rawFpe)); // clamp
+  const revPS = f.revenuePerShare || 0;
+  const rawRevGr = f.revenueGrowth || 0.1;
+  const revGr = Math.max(-20, Math.min(50, rawRevGr * 100));
+  const ps = f.priceToSales || 3;
+  const fcf = f.freeCashflow || 0;
+  const shares = f.sharesOutstanding || 1;
+  const cash = f.totalCash || 0;
+  const debt = f.totalDebt || 0;
+
+  calcState[ticker] = { eps, epsGr, fpe, revPS, revGr, ps, fcf, shares, cash, debt, price };
+
+  const guide = calcGuidance(f, price);
+  const el = document.getElementById(`calc-${ticker}`);
+  const epsDisabled = eps <= 0.5 || (f.trailingPE && f.trailingPE > 200);
+  const dcfDisabled = !fcf || fcf < 0;
+  const revDisabled = !revPS;
+
+  // Determine which tab is active (best model)
+  const epsActive = guide.best === 'eps' && !epsDisabled;
+  const revActive = guide.best === 'rev' && !revDisabled;
+  const dcfActive = guide.best === 'dcf' && !dcfDisabled;
+  // Fallback
+  const defaultModel = epsActive ? 'eps' : revActive ? 'rev' : dcfActive ? 'dcf' : 'eps';
+
+  el.innerHTML = `
+    <div style="background:#1a1a2e;border:1px solid #2a2a4a;border-radius:6px;padding:10px;margin-bottom:12px">
+      <div style="font-size:12px;color:#e94560;font-weight:600;margin-bottom:4px">${guide.type}</div>
+      <div style="font-size:11px;color:#aaa;line-height:1.5">${guide.note}</div>
+    </div>
+    <div class="calc-tabs">
+      <button class="calc-tab ${defaultModel==='eps'?'active':''}" onclick="switchCalcModel('${ticker}','eps',this)">EPS Growth${epsDisabled?' (N/A)':''}</button>
+      <button class="calc-tab ${defaultModel==='rev'?'active':''}" onclick="switchCalcModel('${ticker}','rev',this)">Revenue Growth${revDisabled?' (N/A)':''}</button>
+      <button class="calc-tab ${defaultModel==='dcf'?'active':''}" onclick="switchCalcModel('${ticker}','dcf',this)">DCF${dcfDisabled?' (N/A)':''}</button>
+    </div>
+    <div id="cm-eps-${ticker}" class="calc-model ${defaultModel==='eps'?'active':''}">
+      ${epsDisabled ? '<div style="color:#666;padding:20px">Not applicable — EPS too low ($'+eps.toFixed(2)+') or P/E too high for meaningful projection. Use Revenue Growth instead.</div>' : `
+      <div style="font-size:11px;color:#666;margin-bottom:8px">Projects future earnings and applies a target P/E multiple. Current EPS: $${eps.toFixed(2)}</div>
+      <div class="slider-row"><label>EPS Growth Rate <span id="sv-eg-${ticker}">${epsGr.toFixed(0)}%</span></label>
+        <input type="range" min="-20" max="50" value="${epsGr.toFixed(0)}" oninput="updCalc('${ticker}')"></div>
+      <div class="slider-row"><label>Target P/E <span id="sv-pe-${ticker}">${fpe.toFixed(0)}</span></label>
+        <input type="range" min="5" max="60" value="${fpe.toFixed(0)}" oninput="updCalc('${ticker}')"></div>
+      <div class="slider-row"><label>Years <span id="sv-yr-${ticker}">5</span></label>
+        <input type="range" min="1" max="10" value="5" oninput="updCalc('${ticker}')"></div>
+      <div class="calc-result" id="cr-eps-${ticker}"></div>`}
+    </div>
+    <div id="cm-rev-${ticker}" class="calc-model ${defaultModel==='rev'?'active':''}">
+      ${revDisabled ? '<div style="color:#666;padding:20px">Not applicable — no revenue data available.</div>' : `
+      <div style="font-size:11px;color:#666;margin-bottom:8px">Projects future revenue and applies a target P/S multiple. Current Rev/Share: $${revPS.toFixed(2)} | Current P/S: ${ps.toFixed(1)}x</div>
+      <div class="slider-row"><label>Revenue Growth <span id="sv-rg-${ticker}">${revGr.toFixed(0)}%</span></label>
+        <input type="range" min="-20" max="50" value="${revGr.toFixed(0)}" oninput="updCalcRev('${ticker}')"></div>
+      <div class="slider-row"><label>Target P/S <span id="sv-ps-${ticker}">${ps.toFixed(1)}</span></label>
+        <input type="range" min="5" max="200" value="${(ps*10).toFixed(0)}" oninput="updCalcRev('${ticker}')"></div>
+      <div class="slider-row"><label>Years <span id="sv-ry-${ticker}">5</span></label>
+        <input type="range" min="1" max="10" value="5" oninput="updCalcRev('${ticker}')"></div>
+      <div class="calc-result" id="cr-rev-${ticker}"></div>`}
+    </div>
+    <div id="cm-dcf-${ticker}" class="calc-model ${defaultModel==='dcf'?'active':''}">
+      ${dcfDisabled ? `<div style="color:#666;padding:20px">Not applicable — ${fcf < 0 ? 'negative free cash flow (' + fVal(fcf,'$') + '). Company is burning cash.' : 'no FCF data available.'}</div>` : `
+      <div style="font-size:11px;color:#666;margin-bottom:8px">Discounts projected free cash flows. Current FCF: ${fVal(fcf,'$')}/year</div>
+      <div class="slider-row"><label>FCF Growth <span id="sv-fg-${ticker}">10%</span></label>
+        <input type="range" min="-10" max="40" value="10" oninput="updCalcDCF('${ticker}')"></div>
+      <div class="slider-row"><label>Discount Rate <span id="sv-dr-${ticker}">10%</span></label>
+        <input type="range" min="5" max="15" value="10" oninput="updCalcDCF('${ticker}')"></div>
+      <div class="slider-row"><label>Terminal Growth <span id="sv-tg-${ticker}">2.5%</span></label>
+        <input type="range" min="10" max="40" value="25" oninput="updCalcDCF('${ticker}')"></div>
+      <div class="calc-result" id="cr-dcf-${ticker}"></div>`}
+    </div>`;
+  if (!epsDisabled) updCalc(ticker);
+  if (revPS) updCalcRev(ticker);
+  if (!dcfDisabled) updCalcDCF(ticker);
+}
+
+function switchCalcModel(ticker, model, btn) {
+  document.querySelectorAll(`#calc-${ticker} .calc-model`).forEach(el => el.classList.remove('active'));
+  document.querySelectorAll(`#calc-${ticker} .calc-tab`).forEach(el => el.classList.remove('active'));
+  document.getElementById(`cm-${model}-${ticker}`).classList.add('active');
+  btn.classList.add('active');
+}
+
+function updCalc(ticker) {
+  const s = calcState[ticker];
+  const el = document.getElementById(`cm-eps-${ticker}`);
+  const sliders = el.querySelectorAll('input[type=range]');
+  const gr = +sliders[0].value / 100; document.getElementById(`sv-eg-${ticker}`).textContent = sliders[0].value + '%';
+  const pe = +sliders[1].value; document.getElementById(`sv-pe-${ticker}`).textContent = pe;
+  const yr = +sliders[2].value; document.getElementById(`sv-yr-${ticker}`).textContent = yr;
+  const futureEps = s.eps * Math.pow(1 + gr, yr);
+  const fv = futureEps * pe;
+  const upside = ((fv - s.price) / s.price * 100);
+  document.getElementById(`cr-eps-${ticker}`).innerHTML = calcResultHTML(fv, s.price, upside, s.eps, gr, yr, pe, 'eps');
+}
+
+function updCalcRev(ticker) {
+  const s = calcState[ticker];
+  const el = document.getElementById(`cm-rev-${ticker}`);
+  const sliders = el.querySelectorAll('input[type=range]');
+  const gr = +sliders[0].value / 100; document.getElementById(`sv-rg-${ticker}`).textContent = sliders[0].value + '%';
+  const ps = +sliders[1].value / 10; document.getElementById(`sv-ps-${ticker}`).textContent = ps.toFixed(1);
+  const yr = +sliders[2].value; document.getElementById(`sv-ry-${ticker}`).textContent = yr;
+  const futureRev = s.revPS * Math.pow(1 + gr, yr);
+  const fv = futureRev * ps;
+  const upside = ((fv - s.price) / s.price * 100);
+  document.getElementById(`cr-rev-${ticker}`).innerHTML = calcResultHTML(fv, s.price, upside, s.revPS, gr, yr, ps, 'rev');
+}
+
+function updCalcDCF(ticker) {
+  const s = calcState[ticker];
+  const el = document.getElementById(`cm-dcf-${ticker}`);
+  const sliders = el.querySelectorAll('input[type=range]');
+  const fg = +sliders[0].value / 100; document.getElementById(`sv-fg-${ticker}`).textContent = sliders[0].value + '%';
+  const dr = +sliders[1].value / 100; document.getElementById(`sv-dr-${ticker}`).textContent = sliders[1].value + '%';
+  const tg = +sliders[2].value / 10 / 100; document.getElementById(`sv-tg-${ticker}`).textContent = (tg*100).toFixed(1) + '%';
+  if (dr <= tg) { document.getElementById(`cr-dcf-${ticker}`).innerHTML = '<div style="color:#ff1744">Discount rate must exceed terminal growth</div>'; return; }
+  let pvSum = 0;
+  let lastFCF = s.fcf;
+  for (let y = 1; y <= 5; y++) {
+    lastFCF = s.fcf * Math.pow(1 + fg, y);
+    pvSum += lastFCF / Math.pow(1 + dr, y);
+  }
+  const tv = lastFCF * (1 + tg) / (dr - tg);
+  const pvTV = tv / Math.pow(1 + dr, 5);
+  const ev = pvSum + pvTV + s.cash - s.debt;
+  const fv = ev / s.shares;
+  const upside = ((fv - s.price) / s.price * 100);
+  document.getElementById(`cr-dcf-${ticker}`).innerHTML = `
+    <div class="calc-price">$${fv > 0 ? fv.toFixed(2) : '0.00'}</div>
+    <div class="calc-upside ${upside > 0 ? 'green' : 'red'}">${upside > 0 ? '+' : ''}${Math.min(upside, 500).toFixed(1)}% ${upside > 0 ? 'upside' : 'downside'}</div>
+    <div style="font-size:11px;color:#666;margin-top:4px">Current: $${s.price.toFixed(2)} | EV: ${fVal(ev,'$')}</div>`;
+}
+
+function calcResultHTML(fv, price, upside, base, gr, yr, mult, type) {
+  const cappedUp = Math.min(Math.max(upside, -100), 500);
+  const label = type === 'eps' ? `EPS: $${base.toFixed(2)} \u2192 $${(base*Math.pow(1+gr,yr)).toFixed(2)} \u00d7 ${mult} P/E` :
+    `Rev/Share: $${base.toFixed(2)} \u2192 $${(base*Math.pow(1+gr,yr)).toFixed(2)} \u00d7 ${mult.toFixed(1)} P/S`;
+  return `<div class="calc-price">$${fv > 0 ? fv.toFixed(2) : '0.00'}</div>
+    <div class="calc-upside ${upside > 0 ? 'green' : 'red'}">${upside > 0 ? '+' : ''}${cappedUp.toFixed(1)}% ${upside > 0 ? 'upside' : 'downside'}</div>
+    <div style="font-size:11px;color:#666;margin-top:4px">Current: $${price.toFixed(2)} | ${label}</div>`;
 }
 
 loadData();
