@@ -196,6 +196,42 @@ def compute_adx(highs, lows, closes, period=14):
     return round(adx, 1)
 
 
+def compute_bollinger_bands(closes, period=20, num_std=2):
+    if len(closes) < period:
+        return None, None, None
+    window = closes[-period:]
+    middle = sum(window) / period
+    variance = sum((c - middle) ** 2 for c in window) / period
+    stddev = variance ** 0.5
+    return round(middle, 4), round(middle + num_std * stddev, 4), round(middle - num_std * stddev, 4)
+
+
+def compute_obv(closes, volumes):
+    if len(closes) < 2 or len(volumes) < 2:
+        return None, None
+    obv = [0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv.append(obv[-1] + volumes[i])
+        elif closes[i] < closes[i - 1]:
+            obv.append(obv[-1] - volumes[i])
+        else:
+            obv.append(obv[-1])
+    return obv[-1], obv
+
+
+def detect_obv_divergence(closes, obv_values, lookback=20):
+    if not obv_values or len(closes) < lookback or len(obv_values) < lookback:
+        return None
+    price_delta = closes[-1] - closes[-lookback]
+    obv_delta = obv_values[-1] - obv_values[-lookback]
+    if price_delta < 0 and obv_delta > 0:
+        return "bullish"
+    if price_delta > 0 and obv_delta < 0:
+        return "bearish"
+    return None
+
+
 def fetch_technicals(ticker):
     """Fetch OHLCV from Yahoo Finance, compute comprehensive technical indicators and composite score."""
     try:
@@ -252,6 +288,13 @@ def fetch_technicals(ticker):
         # ADX (14)
         adx = compute_adx(highs, lows, closes)
 
+        # Bollinger Bands (20, 2)
+        bb_middle, bb_upper, bb_lower = compute_bollinger_bands(closes)
+
+        # OBV
+        obv_current, obv_series = compute_obv(closes, volumes)
+        obv_divergence = detect_obv_divergence(closes, obv_series) if obv_series else None
+
         # 52-week high/low
         high_52w = round(max(closes[-252:]), 2) if closes else None
         low_52w = round(min(closes[-252:]), 2) if closes else None
@@ -274,6 +317,11 @@ def fetch_technicals(ticker):
             if macd_hist > 0: signals.append("MACD bullish")
             else: signals.append("MACD bearish")
         if adx and adx > 25: signals.append(f"strong trend (ADX {adx})")
+        if bb_upper and bb_lower:
+            if current <= bb_lower: signals.append("BB oversold")
+            elif current >= bb_upper: signals.append("BB overbought")
+        if obv_divergence == "bullish": signals.append("OBV bullish divergence")
+        elif obv_divergence == "bearish": signals.append("OBV bearish divergence")
 
         # --- YTD ---
         ytd_pct = None
@@ -321,7 +369,10 @@ def fetch_technicals(ticker):
                 osc_raw += 20; score_reasons.append(f"Stochastic oversold + bullish ({stoch_k:.0f}) (+Osc)")
             elif stoch_k > 80 and stoch_k < stoch_d:
                 osc_raw -= 20; score_reasons.append(f"Stochastic overbought + bearish ({stoch_k:.0f}) (-Osc)")
-        osc_score = max(0, min(100, (osc_raw + 70) / 1.4))
+        if bb_upper and bb_lower:
+            if current <= bb_lower: osc_raw += 20; score_reasons.append("BB oversold (+Osc)")
+            elif current >= bb_upper: osc_raw -= 20; score_reasons.append("BB overbought (-Osc)")
+        osc_score = max(0, min(100, (osc_raw + 90) / 1.8))
 
         # 3. Volume Score (0-100, weight 20%)
         vol_raw = 0
@@ -333,7 +384,11 @@ def fetch_technicals(ticker):
                 vol_raw += 15; score_reasons.append("Bullish volume confirmation (+Vol)")
             elif closes[-1] < opens[-1] and volumes[-1] > vol_avg_20:
                 vol_raw -= 15; score_reasons.append("Bearish volume confirmation (-Vol)")
-        vol_score = max(0, min(100, (vol_raw + 50) / 1.0))
+        if obv_divergence == "bullish":
+            vol_raw += 15; score_reasons.append("OBV bullish divergence (+Vol)")
+        elif obv_divergence == "bearish":
+            vol_raw -= 15; score_reasons.append("OBV bearish divergence (-Vol)")
+        vol_score = max(0, min(100, (vol_raw + 65) / 1.3))
 
         # 4. Trend Strength Score (0-100, weight 15%)
         if adx:
@@ -365,6 +420,8 @@ def fetch_technicals(ticker):
             "macd": macd_line, "macd_signal": macd_signal, "macd_hist": macd_hist,
             "stoch_k": stoch_k, "stoch_d": stoch_d,
             "mfi": mfi, "adx": adx,
+            "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_middle": bb_middle,
+            "obv": obv_current, "obv_divergence": obv_divergence,
             "high_52w": high_52w, "low_52w": low_52w,
             "signals": signals,
             "score": composite, "recommendation": recommendation, "score_reasons": score_reasons,
@@ -399,109 +456,234 @@ def init_yahoo_auth():
     print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
 
 
-def fetch_price_target(ticker):
-    """Fetch analyst price targets from Yahoo Finance quoteSummary (requires auth)."""
+def fetch_fundamentals(ticker):
+    """Fetch fundamentals + price targets from Yahoo Finance quoteSummary."""
     global _yf_cookie_file, _yf_crumb
     if not _yf_crumb:
         return None
     try:
+        modules = "financialData,defaultKeyStatistics,summaryDetail,earningsTrend"
         result = subprocess.run(
             ["curl", "-s", "-b", _yf_cookie_file,
-             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=financialData&crumb={_yf_crumb}",
+             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={modules}&crumb={_yf_crumb}",
              "-H", "User-Agent: Mozilla/5.0"],
             capture_output=True, text=True, timeout=15,
         )
         data = json.loads(result.stdout)
-        fd = data["quoteSummary"]["result"][0]["financialData"]
+        q = data["quoteSummary"]["result"][0]
+        fd = q.get("financialData", {})
+        dks = q.get("defaultKeyStatistics", {})
+        sd = q.get("summaryDetail", {})
+        et = q.get("earningsTrend", {})
+
+        def g(obj, key):
+            v = obj.get(key, {})
+            return v.get("raw") if isinstance(v, dict) else None
+
+        # Earnings trend growth rates
+        trends = et.get("trend", [])
+        cy_growth = None
+        ny_growth = None
+        try:
+            if len(trends) > 2:
+                cy_growth = trends[2].get("growth", {}).get("raw")
+            if len(trends) > 3:
+                ny_growth = trends[3].get("growth", {}).get("raw")
+        except Exception:
+            pass
+
+        price = g(fd, "currentPrice")
+        market_cap = g(sd, "marketCap")
+        total_revenue = g(fd, "totalRevenue")
+        shares = round(market_cap / price) if market_cap and price and price > 0 else None
+        rev_per_share = round(total_revenue / shares, 2) if total_revenue and shares else None
+
         return {
-            "target_high": fd.get("targetHighPrice", {}).get("raw"),
-            "target_low": fd.get("targetLowPrice", {}).get("raw"),
-            "target_mean": fd.get("targetMeanPrice", {}).get("raw"),
-            "target_median": fd.get("targetMedianPrice", {}).get("raw"),
-            "num_analysts": fd.get("numberOfAnalystOpinions", {}).get("raw"),
+            "price_target": {
+                "target_high": g(fd, "targetHighPrice"),
+                "target_low": g(fd, "targetLowPrice"),
+                "target_mean": g(fd, "targetMeanPrice"),
+                "target_median": g(fd, "targetMedianPrice"),
+                "num_analysts": g(fd, "numberOfAnalystOpinions"),
+            },
+            "fundamentals": {
+                # Valuation
+                "trailingPE": g(sd, "trailingPE"),
+                "forwardPE": g(dks, "forwardPE"),
+                "pegRatio": g(dks, "pegRatio"),
+                "priceToSales": g(sd, "priceToSalesTrailing12Months"),
+                "priceToBook": g(dks, "priceToBook"),
+                "enterpriseToEbitda": g(dks, "enterpriseToEbitda"),
+                # Profitability
+                "grossMargins": g(fd, "grossMargins"),
+                "operatingMargins": g(fd, "operatingMargins"),
+                "profitMargins": g(fd, "profitMargins"),
+                "returnOnEquity": g(fd, "returnOnEquity"),
+                "returnOnAssets": g(fd, "returnOnAssets"),
+                # Growth
+                "revenueGrowth": g(fd, "revenueGrowth"),
+                "earningsGrowth": g(fd, "earningsGrowth"),
+                "earningsQuarterlyGrowth": g(dks, "earningsQuarterlyGrowth"),
+                "currentYearGrowth": cy_growth,
+                "nextYearGrowth": ny_growth,
+                # Health
+                "debtToEquity": g(fd, "debtToEquity"),
+                "currentRatio": g(fd, "currentRatio"),
+                "freeCashflow": g(fd, "freeCashflow"),
+                "totalCash": g(fd, "totalCash"),
+                "totalDebt": g(fd, "totalDebt"),
+                "operatingCashflow": g(fd, "operatingCashflow"),
+                "ebitda": g(fd, "ebitda"),
+                "totalRevenue": total_revenue,
+                # EPS & other
+                "trailingEps": g(dks, "trailingEps"),
+                "forwardEps": g(dks, "forwardEps"),
+                "beta": g(dks, "beta"),
+                "enterpriseValue": g(dks, "enterpriseValue"),
+                "marketCap": market_cap,
+                "sharesOutstanding": shares,
+                "revenuePerShare": rev_per_share,
+            },
         }
     except Exception as e:
-        print(f"Warning: failed to fetch price target for {ticker}: {e}")
+        print(f"Warning: failed to fetch fundamentals for {ticker}: {e}")
         return None
 
 
-def compute_price_target_score(price, target_mean, num_analysts):
-    """Compute a 0-100 score based on analyst price target upside/downside."""
-    if not target_mean or not price or not num_analysts:
-        return 50, []  # Neutral if no data
+def _score_tier(val, tiers):
+    """Score a value against [(threshold, score), ...] tiers. Returns score for first matching tier."""
+    if val is None:
+        return 50
+    for threshold, score in tiers:
+        if val <= threshold:
+            return score
+    return tiers[-1][1] if tiers else 50
 
+
+def compute_fundamental_score(fund, price, target_mean, num_analysts):
+    """Compute 0-100 fundamental score from valuation, profitability, growth, health, and price target."""
+    if not fund:
+        return 50, []
     reasons = []
-    upside = ((target_mean - price) / price) * 100
 
-    if upside > 20:
-        pt_score = 100
-        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
-    elif upside > 10:
-        pt_score = 80
-        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
-    elif upside > 0:
-        pt_score = 60
-        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% upside (+PT)")
-    elif upside > -10:
-        pt_score = 40
-        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% (-PT)")
-    else:
-        pt_score = 20
-        reasons.append(f"Analyst target ${target_mean:.0f} = {upside:+.0f}% downside (-PT)")
+    # 1. Valuation (25%)
+    pe = _score_tier(fund.get("trailingPE"), [(15, 100), (20, 75), (30, 50), (40, 25)])
+    if fund.get("trailingPE") and fund["trailingPE"] < 0:
+        pe = 25  # Negative earnings
+    peg = _score_tier(fund.get("pegRatio"), [(1, 100), (1.5, 75), (2, 50), (3, 25)])
+    pb = _score_tier(fund.get("priceToBook"), [(3, 75), (5, 50), (10, 25)])
+    val_score = (pe + peg + pb) / 3
+    if val_score >= 70:
+        reasons.append(f"Attractive valuation (P/E={fund.get('trailingPE', 'N/A')}) (+Fund)")
+    elif val_score <= 30:
+        reasons.append(f"Expensive valuation (P/E={fund.get('trailingPE', 'N/A')}) (-Fund)")
 
-    # Low analyst coverage reduces confidence — pull toward neutral
-    if num_analysts < 5:
-        pt_score = (pt_score + 50) / 2
-        reasons.append(f"Low analyst coverage ({num_analysts}) — reduced confidence")
+    # 2. Profitability (20%)
+    gm = _score_tier(fund.get("grossMargins"), [(-999, 0)]) if fund.get("grossMargins") is None else (
+        100 if fund["grossMargins"] > 0.5 else 75 if fund["grossMargins"] > 0.3 else 50 if fund["grossMargins"] > 0.15 else 25
+    )
+    om = 50
+    if fund.get("operatingMargins") is not None:
+        om = 100 if fund["operatingMargins"] > 0.2 else 75 if fund["operatingMargins"] > 0.1 else 50 if fund["operatingMargins"] > 0 else 25
+    roe = 50
+    if fund.get("returnOnEquity") is not None:
+        roe = 100 if fund["returnOnEquity"] > 0.2 else 75 if fund["returnOnEquity"] > 0.1 else 50 if fund["returnOnEquity"] > 0 else 25
+    prof_score = (gm + om + roe) / 3
+    if prof_score >= 70:
+        reasons.append(f"Strong profitability (GM={fund.get('grossMargins', 0):.0%}, ROE={fund.get('returnOnEquity', 0):.0%}) (+Fund)")
 
-    return pt_score, reasons
+    # 3. Growth (20%)
+    def growth_score(val):
+        if val is None: return 50
+        if val > 0.25: return 100
+        if val > 0.1: return 75
+        if val > 0: return 50
+        return 25
+    rg = growth_score(fund.get("revenueGrowth"))
+    eg = growth_score(fund.get("earningsGrowth"))
+    cyg = growth_score(fund.get("currentYearGrowth"))
+    grow_score = (rg + eg + cyg) / 3
+    if grow_score >= 70:
+        reasons.append(f"Strong growth (Rev={fund.get('revenueGrowth', 0):.0%}, EPS={fund.get('earningsGrowth', 0):.0%}) (+Fund)")
+    elif grow_score <= 30:
+        reasons.append(f"Weak growth (-Fund)")
+
+    # 4. Financial Health (15%)
+    de = 50
+    if fund.get("debtToEquity") is not None:
+        de = 100 if fund["debtToEquity"] < 50 else 75 if fund["debtToEquity"] < 100 else 50 if fund["debtToEquity"] < 200 else 25
+    cr = 50
+    if fund.get("currentRatio") is not None:
+        cr = 100 if fund["currentRatio"] > 2 else 75 if fund["currentRatio"] > 1.5 else 50 if fund["currentRatio"] > 1 else 25
+    fcf = 75 if fund.get("freeCashflow") and fund["freeCashflow"] > 0 else 25
+    health_score = (de + cr + fcf) / 3
+
+    # 5. Price Target (20%)
+    pt_score = 50
+    if target_mean and price and num_analysts:
+        upside = ((target_mean - price) / price) * 100
+        if upside > 20: pt_score = 100
+        elif upside > 10: pt_score = 80
+        elif upside > 0: pt_score = 60
+        elif upside > -10: pt_score = 40
+        else: pt_score = 20
+        if num_analysts and num_analysts < 5:
+            pt_score = (pt_score + 50) / 2
+        reasons.append(f"Analyst target ${target_mean:.0f} ({upside:+.0f}%)")
+
+    fund_total = val_score * 0.25 + prof_score * 0.20 + grow_score * 0.20 + health_score * 0.15 + pt_score * 0.20
+    return round(fund_total, 1), reasons
 
 
-def merge_price_target(technicals, price_target):
-    """Merge price target data into technicals and recalculate composite score."""
+def merge_fundamentals(technicals, fund_data):
+    """Merge fundamentals and price targets into technicals, compute combined score."""
     if not technicals:
         return technicals
 
-    # Add price target fields
-    if price_target:
-        technicals["target_high"] = price_target.get("target_high")
-        technicals["target_low"] = price_target.get("target_low")
-        technicals["target_mean"] = price_target.get("target_mean")
-        technicals["target_median"] = price_target.get("target_median")
-        technicals["num_analysts"] = price_target.get("num_analysts")
-    else:
-        technicals["target_high"] = None
-        technicals["target_low"] = None
-        technicals["target_mean"] = None
-        technicals["target_median"] = None
-        technicals["num_analysts"] = None
+    pt = fund_data.get("price_target", {}) if fund_data else {}
+    fund = fund_data.get("fundamentals", {}) if fund_data else {}
 
-    # Compute price target score
-    pt_score, pt_reasons = compute_price_target_score(
-        technicals.get("price"), technicals.get("target_mean"), technicals.get("num_analysts")
+    # Price target fields
+    technicals["target_high"] = pt.get("target_high")
+    technicals["target_low"] = pt.get("target_low")
+    technicals["target_mean"] = pt.get("target_mean")
+    technicals["target_median"] = pt.get("target_median")
+    technicals["num_analysts"] = pt.get("num_analysts")
+
+    # Fundamentals dict
+    technicals["fundamentals"] = fund if fund else None
+
+    # Technical score stays pure (already computed in fetch_technicals)
+    tech_score = technicals.get("score", 50)
+    technicals["tech_score"] = tech_score
+
+    # Compute fundamental score
+    fund_score, fund_reasons = compute_fundamental_score(
+        fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts")
     )
+    technicals["fund_score"] = fund_score
+    technicals["fund_score_reasons"] = fund_reasons
 
-    # Recalculate composite with new weights (must reverse-engineer component scores from existing score)
-    # Original: composite = (ma * 0.25) + (osc * 0.40) + (vol * 0.20) + (trend * 0.15)
-    # We stored the composite but not the component scores, so recalculate from score_reasons
-    # Simpler approach: adjust the existing score by blending in the PT component
-    old_score = technicals.get("score", 50)
-    # New weights: old components 90%, price target 10%
-    new_score = round(old_score * 0.90 + pt_score * 0.10, 1)
+    # Combined score: tech 40%, fundamental 60%
+    combined = round(tech_score * 0.40 + fund_score * 0.60, 1)
+    technicals["combined_score"] = combined
 
-    technicals["score"] = new_score
-    technicals["score_reasons"] = technicals.get("score_reasons", []) + pt_reasons
+    # Recommendation from combined score
+    if combined >= 70: technicals["recommendation"] = "Strong Buy"
+    elif combined >= 55: technicals["recommendation"] = "Buy"
+    elif combined >= 45: technicals["recommendation"] = "Hold"
+    elif combined >= 30: technicals["recommendation"] = "Sell"
+    else: technicals["recommendation"] = "Strong Sell"
 
-    if new_score >= 70:
-        technicals["recommendation"] = "Strong Buy"
-    elif new_score >= 55:
-        technicals["recommendation"] = "Buy"
-    elif new_score >= 45:
-        technicals["recommendation"] = "Hold"
-    elif new_score >= 30:
-        technicals["recommendation"] = "Sell"
-    else:
-        technicals["recommendation"] = "Strong Sell"
+    # Keep pure technical recommendation
+    if tech_score >= 70: technicals["tech_recommendation"] = "Strong Buy"
+    elif tech_score >= 55: technicals["tech_recommendation"] = "Buy"
+    elif tech_score >= 45: technicals["tech_recommendation"] = "Hold"
+    elif tech_score >= 30: technicals["tech_recommendation"] = "Sell"
+    else: technicals["tech_recommendation"] = "Strong Sell"
+
+    # Merge reasons
+    technicals["score_reasons"] = technicals.get("score_reasons", []) + fund_reasons
 
     return technicals
 
@@ -757,16 +939,33 @@ def analyze(prompt):
 
 
 def sanitize_telegram_html(text):
-    """Strip HTML tags that Telegram doesn't support, keeping only allowed ones."""
+    """Make text safe for Telegram HTML parse mode.
+
+    Strategy: protect allowed tags, escape everything else, restore tags.
+    This handles bare < > in text (e.g. 'RSI > 70') that break Telegram's parser.
+    """
     import re
-    # Telegram HTML mode only supports: b, i, u, s, code, pre, a
     allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
-    def replace_tag(m):
-        tag = m.group(1).lower().strip().split()[0].lstrip('/')
-        if tag in allowed:
-            return m.group(0)
-        return ''
-    return re.sub(r'<(/?\s*[a-zA-Z][^>]*)>', replace_tag, text)
+    placeholders = {}
+    counter = [0]
+
+    def protect_tag(m):
+        tag_name = m.group(1).lower().strip().split()[0].lstrip('/')
+        if tag_name in allowed:
+            key = f"\x00TAG{counter[0]}\x00"
+            placeholders[key] = m.group(0)
+            counter[0] += 1
+            return key
+        return m.group(0)  # leave unsupported tags to be escaped below
+
+    # 1. Replace allowed HTML tags with placeholders
+    text = re.sub(r'<(/?\s*[a-zA-Z][^>]*)>', protect_tag, text)
+    # 2. Escape all remaining HTML-special characters
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    # 3. Restore allowed tags
+    for key, tag in placeholders.items():
+        text = text.replace(key, tag)
+    return text
 
 
 def send_telegram(text, bot_token, chat_id):
@@ -894,8 +1093,8 @@ def main():
     for ticker in all_tickers:
         technicals[ticker] = fetch_technicals(ticker)
         time.sleep(0.2)
-        pt = fetch_price_target(ticker)
-        technicals[ticker] = merge_price_target(technicals[ticker], pt)
+        fund_data = fetch_fundamentals(ticker)
+        technicals[ticker] = merge_fundamentals(technicals[ticker], fund_data)
         time.sleep(0.2)  # Rate limit Yahoo Finance
 
     # Fetch news for portfolio holdings
