@@ -2,8 +2,8 @@ name: Market Analysis
 
 on:
   schedule:
-    - cron: "30 12 * * 1-5"  # 8:30 AM ET (UTC-4)
-    - cron: "0 19 * * 1-5"   # 3:00 PM ET (UTC-4)
+    - cron: "30 12 * * *"    # 8:30 AM ET (UTC-4) — daily to keep repo active
+    - cron: "0 19 * * 1-5"  # 3:00 PM ET (UTC-4) — weekdays only
   workflow_dispatch:
     inputs:
       briefing_type:
