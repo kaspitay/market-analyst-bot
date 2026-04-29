@@ -135,6 +135,11 @@
     .sc-row b { color: #fff; }
     .ev-price { font-size: 28px; font-weight: 700; }
     .ev-label { font-size: 11px; color: #888; margin-bottom: 4px; }
+    .fh-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    .fh-chart { background: #12122a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; }
+    .fh-chart h5 { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .fh-chart canvas { width: 100% !important; height: 160px !important; }
+    .fh-empty { color: #555; font-size: 13px; padding: 20px; text-align: center; }
     .scores-row { display: flex; gap: 12px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
     .score-item { font-size: 11px; color: #888; }
     .score-item b { color: #fff; }
@@ -143,6 +148,7 @@
       .grid-2 { grid-template-columns: 1fr; }
       .detail-content { grid-template-columns: 1fr; }
       .scenario-grid, .scenario-inputs { grid-template-columns: 1fr; }
+      .fh-grid { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 500px) {
       .grid-4 { grid-template-columns: 1fr; }
@@ -547,6 +553,7 @@ function renderTickers() {
       <div class="detail-tabs">
         <button class="detail-tab active" onclick="switchDTab('${e.ticker}','chart',this)">Chart & Indicators</button>
         <button class="detail-tab" onclick="switchDTab('${e.ticker}','fund',this)">Fundamentals</button>
+        <button class="detail-tab" onclick="switchDTab('${e.ticker}','fh',this)">Financial History</button>
         <button class="detail-tab" onclick="switchDTab('${e.ticker}','calc',this)">Intrinsic Value</button>
       </div>
       <!-- SCORES ROW -->
@@ -617,6 +624,10 @@ function renderTickers() {
           <div class="score-reasons">${(t.fund_score_reasons||[]).map(r=>'<div>\u2022 '+r+'</div>').join('')||'No data'}</div>
         </div>
       </div>
+      <!-- TAB: FINANCIAL HISTORY -->
+      <div id="dtab-fh-${e.ticker}" class="dtab">
+        <div id="fh-${e.ticker}"><span class="fh-empty">Loading financial history...</span></div>
+      </div>
       <!-- TAB: CALCULATOR -->
       <div id="dtab-calc-${e.ticker}" class="dtab">
         <div id="calc-${e.ticker}"><span style="color:#555">Loading calculator...</span></div>
@@ -641,7 +652,11 @@ function renderTickers() {
 function toggleDetail(ticker) {
   const row = document.getElementById('detail-' + ticker);
   const isOpen = row.classList.contains('open');
-  document.querySelectorAll('.detail-row.open').forEach(r => r.classList.remove('open'));
+  document.querySelectorAll('.detail-row.open').forEach(r => {
+    const tid = r.id.replace('detail-', '');
+    if (fhCharts[tid]) { fhCharts[tid].forEach(c => c.destroy()); delete fhCharts[tid]; delete fhState[tid]; }
+    r.classList.remove('open');
+  });
   Object.values(openCharts).forEach(c => c.destroy());
   openCharts = {};
 
@@ -731,6 +746,68 @@ function switchDTab(ticker, tab, btn) {
   document.getElementById(`dtab-${tab}-${ticker}`).classList.add('active');
   btn.classList.add('active');
   if (tab === 'calc' && !calcState[ticker]) initCalc(ticker);
+  if (tab === 'fh' && !fhState[ticker]) initFH(ticker);
+}
+
+// --- Financial History Charts ---
+let fhState = {};
+let fhCharts = {};
+
+function initFH(ticker) {
+  const t = DATA.tickers[ticker]?.technicals || {};
+  const fh = t.financialHistory;
+  const el = document.getElementById('fh-' + ticker);
+  if (!fh || !fh.length) { el.innerHTML = '<span class="fh-empty">No historical financial data available</span>'; fhState[ticker] = true; return; }
+
+  const years = fh.map(d => d.year);
+  const charts = [
+    { key: 'totalRevenue', label: 'Total Revenue', fmt: '$' },
+    { key: 'grossProfit', label: 'Gross Profit', fmt: '$' },
+    { key: 'operatingIncome', label: 'Operating Income', fmt: '$' },
+    { key: 'netIncome', label: 'Net Income', fmt: '$' },
+    { key: 'eps', label: 'Diluted EPS', fmt: 'n' },
+    { key: 'stockholderEquity', label: 'Shareholder Equity', fmt: '$' },
+  ];
+
+  let html = '<div class="fh-grid">';
+  charts.forEach(c => {
+    html += `<div class="fh-chart"><h5>${c.label}</h5><canvas id="fhc-${c.key}-${ticker}"></canvas></div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+
+  fhCharts[ticker] = [];
+  charts.forEach(c => {
+    const vals = fh.map(d => d[c.key]);
+    const hasData = vals.some(v => v != null);
+    if (!hasData) return;
+    const colors = vals.map(v => v != null && v < 0 ? '#ff174488' : '#e9456088');
+    const borders = vals.map(v => v != null && v < 0 ? '#ff1744' : '#e94560');
+    const ctx = document.getElementById(`fhc-${c.key}-${ticker}`).getContext('2d');
+    fhCharts[ticker].push(new Chart(ctx, {
+      type: 'bar',
+      data: { labels: years, datasets: [{ data: vals, backgroundColor: colors, borderColor: borders, borderWidth: 1, borderRadius: 3 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#888', font: { size: 11 } }, grid: { display: false } },
+          y: { ticks: { color: '#555', font: { size: 10 }, callback: v => fhFmt(v, c.fmt) }, grid: { color: '#1f1f3a' } },
+        },
+      },
+    }));
+  });
+  fhState[ticker] = true;
+}
+
+function fhFmt(v, type) {
+  if (type !== '$') return typeof v === 'number' ? v.toFixed(2) : v;
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e12) return sign + '$' + (abs / 1e12).toFixed(1) + 'T';
+  if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(1) + 'B';
+  if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(0) + 'M';
+  return sign + '$' + abs.toLocaleString();
 }
 
 // --- Valuation Tool ---

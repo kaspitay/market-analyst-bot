@@ -627,6 +627,61 @@ def fetch_fundamentals(ticker):
         return None
 
 
+def fetch_financial_history(ticker):
+    """Fetch annual financial history from Yahoo Finance timeseries API."""
+    global _yf_cookie_file, _yf_crumb
+    if not _yf_crumb:
+        return None
+    try:
+        types = ",".join([
+            "annualTotalRevenue", "annualGrossProfit", "annualOperatingIncome",
+            "annualNetIncome", "annualDilutedEPS", "annualStockholdersEquity",
+        ])
+        now = int(time.time())
+        period1 = now - (5 * 365 * 86400)
+        url = (
+            f"https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{ticker}"
+            f"?type={types}&period1={period1}&period2={now}&padTimeSeries=true&crumb={_yf_crumb}"
+        )
+        result = subprocess.run(
+            ["curl", "-s", "-b", _yf_cookie_file, url, "-H", "User-Agent: Mozilla/5.0"],
+            capture_output=True, text=True, timeout=15,
+        )
+        data = json.loads(result.stdout)
+        series_list = data.get("timeseries", {}).get("result", [])
+
+        # Build a dict of {type_name: {date: value}}
+        by_type = {}
+        for series in series_list:
+            typ = series.get("meta", {}).get("type", [""])[0]
+            short = typ.replace("annual", "")
+            short = short[0].lower() + short[1:]  # camelCase
+            points = series.get(typ, [])
+            by_type[short] = {}
+            for p in points:
+                if p and "reportedValue" in p:
+                    by_type[short][p["asOfDate"]] = p["reportedValue"]["raw"]
+
+        # Collect all dates, build per-year records
+        all_dates = sorted(set(d for m in by_type.values() for d in m))
+        history = []
+        for dt in all_dates:
+            year = dt[:4]
+            history.append({
+                "year": year,
+                "totalRevenue": by_type.get("totalRevenue", {}).get(dt),
+                "grossProfit": by_type.get("grossProfit", {}).get(dt),
+                "operatingIncome": by_type.get("operatingIncome", {}).get(dt),
+                "netIncome": by_type.get("netIncome", {}).get(dt),
+                "eps": by_type.get("dilutedEPS", {}).get(dt),
+                "stockholderEquity": by_type.get("stockholdersEquity", {}).get(dt),
+            })
+        return history if history else None
+    except Exception as e:
+        print(f"Warning: failed to fetch financial history for {ticker}: {e}")
+        return None
+
+
 def _score_tier(val, tiers):
     """Score a value against [(threshold, score), ...] tiers. Returns score for first matching tier."""
     if val is None:
@@ -1202,6 +1257,9 @@ def main():
         time.sleep(0.2)
         fund_data = fetch_fundamentals(ticker)
         technicals[ticker] = merge_fundamentals(technicals[ticker], fund_data)
+        fh = fetch_financial_history(ticker)
+        if technicals[ticker] and fh:
+            technicals[ticker]["financialHistory"] = fh
         time.sleep(0.2)  # Rate limit Yahoo Finance
 
     # Build earnings list from Yahoo Finance calendarEvents (per-ticker)
