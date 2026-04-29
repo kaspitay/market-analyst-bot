@@ -110,9 +110,31 @@
     .slider-row label { display: flex; justify-content: space-between; font-size: 13px; color: #888; margin-bottom: 3px; }
     .slider-row label span { color: #fff; font-weight: 600; font-size: 14px; }
     .slider-row input[type="range"] { width: 100%; accent-color: #e94560; height: 5px; }
-    .calc-result { background: #12122a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 18px; margin-top: 14px; text-align: center; }
-    .calc-price { font-size: 36px; font-weight: 700; }
-    .calc-upside { font-size: 15px; margin-top: 6px; font-weight: 600; }
+    .val-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .val-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .val-table th { color: #888; font-weight: 400; text-align: left; padding: 4px 6px; border-bottom: 1px solid #2a2a4a; }
+    .val-table td { padding: 4px 6px; border-bottom: 1px solid #1f1f3a; }
+    .val-table .fg { color: #00c853; } .val-table .fb { color: #ff1744; }
+    .val-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .val-input { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; text-align: center; }
+    .val-input label { font-size: 10px; color: #666; display: block; margin-bottom: 3px; }
+    .val-input input { width: 70px; background: #12122a; border: 1px solid #533483; color: #fff; border-radius: 4px; padding: 4px 6px; font-size: 13px; text-align: center; font-weight: 600; }
+    .pe-inputs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .pe-input { text-align: center; }
+    .pe-input label { font-size: 10px; display: block; margin-bottom: 3px; }
+    .pe-input input { width: 50px; background: #12122a; border-radius: 4px; padding: 4px; font-size: 13px; text-align: center; font-weight: 600; }
+    .pe-input.low label { color: #ff1744; } .pe-input.low input { border: 1px solid #ff1744; color: #ff1744; }
+    .pe-input.mid label { color: #ffd600; } .pe-input.mid input { border: 1px solid #ffd600; color: #ffd600; }
+    .pe-input.high label { color: #00c853; } .pe-input.high input { border: 1px solid #00c853; color: #00c853; }
+    .scenario-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .scenario-card { background: #12122a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; text-align: center; }
+    .scenario-card.low { border-color: #ff174444; } .scenario-card.mid { border-color: #ffd60044; } .scenario-card.high { border-color: #00c85344; }
+    .scenario-card h5 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 8px; }
+    .sc-price { font-size: 22px; font-weight: 700; }
+    .sc-row { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; color: #888; }
+    .sc-row b { color: #fff; }
+    .ev-price { font-size: 28px; font-weight: 700; }
+    .ev-label { font-size: 11px; color: #888; margin-bottom: 4px; }
     .scores-row { display: flex; gap: 12px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
     .score-item { font-size: 11px; color: #888; }
     .score-item b { color: #fff; }
@@ -120,6 +142,7 @@
       .grid-4 { grid-template-columns: repeat(2, 1fr); }
       .grid-2 { grid-template-columns: 1fr; }
       .detail-content { grid-template-columns: 1fr; }
+      .scenario-grid, .scenario-inputs { grid-template-columns: 1fr; }
     }
     @media (max-width: 500px) {
       .grid-4 { grid-template-columns: 1fr; }
@@ -177,15 +200,25 @@
         <dd>Pure technical analysis: Moving Averages (25%), Oscillators incl. RSI/MACD/Stochastic/BB (40%), Volume incl. MFI/OBV (20%), Trend Strength/ADX (15%).</dd>
 
         <dt>Fundamental Score (0-100)</dt>
-        <dd>Fundamental analysis: Valuation/P/E/PEG (25%), Profitability/margins/ROE (20%), Growth/revenue+earnings (20%), Financial Health/debt/FCF (15%), Analyst Price Targets (20%).</dd>
+        <dd>Sector-relative valuation (P/E &amp; P/S vs sector median, 25%), Profitability/margins/ROE (20%), Growth/revenue+earnings (20%), Quality Score (Piotroski-inspired 0-7, 15%), Analyst Price Targets (20%).</dd>
 
         <dt>Combined Score &amp; Recommendation</dt>
-        <dd>Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b> (biased toward long-term investing). Ranges from <b>Strong Buy</b> (70+) to <b>Strong Sell</b> (&lt;30). Not financial advice.</dd>
+        <dd>Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b>. Ranges: <b>Strong Buy</b> (72+), <b>Buy</b> (60-71), <b>Hold</b> (40-59), <b>Sell</b> (28-39), <b>Strong Sell</b> (&lt;28). Not financial advice.</dd>
 
-        <dt>Price Calculator</dt>
-        <dd>Three models to project future price with <b>bear/base/bull scenarios</b>:
-        <b>EPS Growth</b> (future earnings × your target P/E), <b>Revenue Growth</b> (future revenue × your target P/S), <b>DCF</b> (10-year discounted cash flow with decaying growth).
-        Set your growth and multiple assumptions, see the projected price and annualized return. The scenario bar shows bear/bull range vs current price.</dd>
+        <dt>Intrinsic Value Calculator</dt>
+        <dd>Uses 4 proven valuation methods to estimate fair value, averaged with Margin of Safety.</dd>
+
+        <dt style="font-size:12px;margin-top:8px">How to Evaluate Value Stocks</dt>
+        <dd style="font-size:12px">(DVN, UNH, MA &mdash; profitable, reasonable P/E)<br>
+        Use all 4 methods. Set growth to <b>5-12%</b> (sustainable, don't trust one-year spikes). <b>Graham Number</b> is most relevant for asset-heavy companies. Buy when Margin of Safety &gt; 20%. Watch for value traps &mdash; check Quality Score.</dd>
+
+        <dt style="font-size:12px;margin-top:8px">How to Evaluate Growth Stocks</dt>
+        <dd style="font-size:12px">(NVDA, MSFT, ZETA &mdash; high growth, high P/E)<br>
+        Focus on <b>Graham Formula + DCF</b> only. Ignore Graham Number (book value irrelevant for asset-light tech). Growth always decelerates &mdash; if analysts say 50%, try <b>25-30%</b> for a conservative view. If you need &gt;30% growth for 5+ years to justify the price, you're speculating.</dd>
+
+        <dt style="font-size:12px;margin-top:8px">Pre-Profit Companies</dt>
+        <dd style="font-size:12px">(ACHR, DCTH &mdash; no earnings)<br>
+        None of these methods work. Falls back to <b>analyst price targets</b>. These are speculative positions, not investments. Size small and know your thesis.</dd>
       </dl>
     </div>
 
@@ -262,7 +295,7 @@ let openCharts = {};
 
 async function loadData() {
   try {
-    const resp = await fetch('data/market-data.json');
+    const resp = await fetch('data/market-data.json?v=' + Date.now());
     DATA = await resp.json();
     renderAll();
   } catch (e) {
@@ -514,7 +547,7 @@ function renderTickers() {
       <div class="detail-tabs">
         <button class="detail-tab active" onclick="switchDTab('${e.ticker}','chart',this)">Chart & Indicators</button>
         <button class="detail-tab" onclick="switchDTab('${e.ticker}','fund',this)">Fundamentals</button>
-        <button class="detail-tab" onclick="switchDTab('${e.ticker}','calc',this)">Price Calculator</button>
+        <button class="detail-tab" onclick="switchDTab('${e.ticker}','calc',this)">Intrinsic Value</button>
       </div>
       <!-- SCORES ROW -->
       <div class="scores-row">
@@ -700,73 +733,122 @@ function switchDTab(ticker, tab, btn) {
   if (tab === 'calc' && !calcState[ticker]) initCalc(ticker);
 }
 
-// --- Calculator ---
+// --- Valuation Tool ---
 let calcState = {};
 
 function initCalc(ticker) {
-  const t = DATA.tickers[ticker]?.technicals;
-  const f = t?.fundamentals || {};
-  const price = t?.price || 0;
-  const eps = f.trailingEps || f.forwardEps || 0;
-  const rawEpsGr = f.currentYearGrowth || f.earningsGrowth || 0.1;
-  const epsGr = Math.max(-20, Math.min(50, rawEpsGr * 100));
-  const rawFpe = (f.forwardPE && f.forwardPE > 0) ? f.forwardPE : (f.trailingPE && f.trailingPE > 0) ? f.trailingPE : 15;
-  const fpe = Math.max(5, Math.min(60, Math.round(rawFpe)));
-  const revPS = f.revenuePerShare || 0;
-  const rawRevGr = f.revenueGrowth || 0.1;
-  const revGr = Math.max(-20, Math.min(80, rawRevGr * 100));
-  const rawPS = (f.priceToSales && f.priceToSales > 0) ? f.priceToSales : 3;
-  const ps = Math.min(rawPS, 40);
-
-  // Auto-pick: use EPS if profitable, otherwise Revenue
-  const useEps = eps > 0.5 && !(f.trailingPE && f.trailingPE > 200);
-  const mode = useEps ? 'eps' : 'rev';
-  const growthDefault = useEps ? Math.round(epsGr) : Math.round(revGr);
-  const multDefault = useEps ? fpe : Math.round(ps * 10) / 10;
-  const multLabel = useEps ? 'P/E' : 'P/S';
-  const multMax = useEps ? 60 : 400;
-  const multSliderVal = useEps ? fpe : Math.min(Math.round(ps * 10), 400);
-  const base = useEps ? eps : revPS;
-  const baseLabel = useEps ? `EPS: $${eps.toFixed(2)}` : `Rev/Share: $${revPS.toFixed(2)}`;
-  const growthMax = useEps ? 50 : 80;
-
-  calcState[ticker] = { mode, base, price, useEps };
-
+  const t = DATA.tickers[ticker]?.technicals || {};
+  const f = t.fundamentals || {};
+  const price = t.price || 0;
   const el = document.getElementById(`calc-${ticker}`);
+  const rev = f.totalRevenue || 0;
+  const shares = f.sharesOutstanding || 0;
+  const margin = f.profitMargins || f.operatingMargins || 0;
+  const revGr = f.revenueGrowth || 0;
+  const pe = f.forwardPE > 0 ? f.forwardPE : (f.trailingPE > 0 ? f.trailingPE : 15);
+  const mc = f.marketCap || (price * shares);
+
+  // Fallback for pre-profit / no data
+  if (!rev || !shares || shares <= 0) {
+    const tLow = t.target_low, tMean = t.target_mean, tHigh = t.target_high;
+    if (tMean && price > 0) {
+      el.innerHTML = `<div style="font-size:12px;color:#888;margin-bottom:10px">No revenue data \u2014 using <b style="color:#fff">Analyst Targets</b> (${t.num_analysts||'?'} analysts)</div>
+        <div class="scenario-grid">
+          <div class="scenario-card low"><h5 style="color:#ff1744">Low</h5><div class="sc-price">$${tLow?.toFixed(2)||'N/A'}</div></div>
+          <div class="scenario-card mid"><h5 style="color:#ffd600">Mean</h5><div class="sc-price">$${tMean.toFixed(2)}</div></div>
+          <div class="scenario-card high"><h5 style="color:#00c853">High</h5><div class="sc-price">$${tHigh?.toFixed(2)||'N/A'}</div></div>
+        </div>`;
+    } else { el.innerHTML = '<div style="color:#666;padding:20px;text-align:center">Insufficient data.</div>'; }
+    calcState[ticker] = { mode: 'targets' }; return;
+  }
+
+  const revB = rev / 1e9;
+  const marginPct = Math.max(Math.round(margin * 100), 1);
+  const grPct = Math.max(Math.round(revGr * 100), 0);
+  const basePE = Math.round(pe);
+  const lowPE = Math.max(Math.round(basePE * 0.75), 5);
+  const highPE = Math.round(basePE * 1.25);
+
+  calcState[ticker] = { rev, shares, price, mc };
+
   el.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:10px">
-      ${useEps ? `Using <b style="color:#fff">EPS Growth</b> model — ${baseLabel}, current P/E: ${fpe}x` : `Using <b style="color:#fff">Revenue Growth</b> model — ${baseLabel}, current P/S: ${rawPS.toFixed(1)}x`}
+    <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px">Valuation Tool</div>
+    <div class="val-layout">
+      <div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px">Revenue & Profit Forecast</div>
+        <div id="vt-table-${ticker}"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px">Valuation Assumptions</div>
+        <div class="val-inputs">
+          <div class="val-input"><label>Base Revenue ($B)</label><input id="vi-rev-${ticker}" type="number" value="${revB.toFixed(1)}" step="1" oninput="updCalc('${ticker}')"></div>
+          <div class="val-input"><label>Forecast Years</label><input id="vi-yr-${ticker}" type="number" value="5" min="1" max="10" oninput="updCalc('${ticker}')"></div>
+          <div class="val-input"><label>Revenue Growth (%)</label><input id="vi-gr-${ticker}" type="number" value="${grPct}" step="1" oninput="updCalc('${ticker}')"></div>
+          <div class="val-input"><label>Target Profit Margin (%)</label><input id="vi-mg-${ticker}" type="number" value="${marginPct}" step="1" oninput="updCalc('${ticker}')"></div>
+          <div class="val-input"><label>Current Price ($)</label><input id="vi-pr-${ticker}" type="number" value="${price.toFixed(2)}" step="0.01" readonly style="color:#888"></div>
+          <div class="val-input"><label>Market Cap ($B)</label><input id="vi-mc-${ticker}" type="number" value="${(mc/1e9).toFixed(0)}" readonly style="color:#888"></div>
+        </div>
+      </div>
     </div>
-    <div class="slider-row"><label>Annual Growth <span id="sv-gr-${ticker}">${growthDefault}%</span></label>
-      <input type="range" min="-20" max="${growthMax}" value="${growthDefault}" oninput="updCalc('${ticker}')"></div>
-    <div class="slider-row"><label>Exit ${multLabel} <span id="sv-mt-${ticker}">${useEps ? fpe+'x' : ps.toFixed(1)+'x'}</span></label>
-      <input type="range" min="${useEps ? 5 : 5}" max="${multMax}" value="${multSliderVal}" oninput="updCalc('${ticker}')"></div>
-    <div class="slider-row"><label>Years <span id="sv-yr-${ticker}">5</span></label>
-      <input type="range" min="1" max="10" value="5" oninput="updCalc('${ticker}')"></div>
-    <div class="calc-result" id="cr-${ticker}"></div>`;
+    <div style="font-size:11px;color:#888;margin:12px 0 6px">Valuation Multiples (P/E)</div>
+    <div class="pe-inputs">
+      <div class="pe-input low"><label>Low Multiple</label><input id="vi-pel-${ticker}" type="number" value="${lowPE}" step="1" oninput="updCalc('${ticker}')"></div>
+      <div class="pe-input mid"><label>Base Multiple</label><input id="vi-pem-${ticker}" type="number" value="${basePE}" step="1" oninput="updCalc('${ticker}')"></div>
+      <div class="pe-input high"><label>High Multiple</label><input id="vi-peh-${ticker}" type="number" value="${highPE}" step="1" oninput="updCalc('${ticker}')"></div>
+    </div>
+    <div class="scenario-grid" id="sgrid-${ticker}"></div>`;
   updCalc(ticker);
 }
 
 function updCalc(ticker) {
   const s = calcState[ticker];
-  const el = document.getElementById(`calc-${ticker}`);
-  const sliders = el.querySelectorAll('input[type=range]');
-  const gr = +sliders[0].value / 100; document.getElementById(`sv-gr-${ticker}`).textContent = sliders[0].value + '%';
-  const mult = s.useEps ? +sliders[1].value : +sliders[1].value / 10;
-  document.getElementById(`sv-mt-${ticker}`).textContent = (s.useEps ? mult : mult.toFixed(1)) + 'x';
-  const yr = +sliders[2].value; document.getElementById(`sv-yr-${ticker}`).textContent = yr;
+  const baseRev = +document.getElementById(`vi-rev-${ticker}`).value * 1e9;
+  const years = +document.getElementById(`vi-yr-${ticker}`).value || 5;
+  const gr = +document.getElementById(`vi-gr-${ticker}`).value / 100;
+  const mg = +document.getElementById(`vi-mg-${ticker}`).value / 100;
+  const pelPE = +document.getElementById(`vi-pel-${ticker}`).value;
+  const basePE = +document.getElementById(`vi-pem-${ticker}`).value;
+  const highPE = +document.getElementById(`vi-peh-${ticker}`).value;
 
-  const futureBase = s.base * Math.pow(1 + gr, yr);
-  const fv = futureBase * mult;
-  const upside = ((fv - s.price) / s.price * 100);
-  const annReturn = fv > 0 && s.price > 0 ? (Math.pow(fv / s.price, 1/yr) - 1) * 100 : 0;
+  // Build forecast table
+  let tableHTML = '<table class="val-table"><tr><th>Year</th><th>Revenue ($B)</th><th>Margin</th><th>Profit ($B)</th></tr>';
+  const curYear = new Date().getFullYear();
+  let finalRev = baseRev, finalProfit = 0;
+  for (let y = 1; y <= years; y++) {
+    const rev = baseRev * Math.pow(1 + gr, y);
+    const profit = rev * mg;
+    const revB = (rev / 1e9).toFixed(1);
+    const profitB = (profit / 1e9).toFixed(1);
+    const mgPct = (mg * 100).toFixed(1);
+    tableHTML += `<tr><td>${curYear + y}</td><td>$${revB}</td><td class="fg">${mgPct}%</td><td>$${profitB}</td></tr>`;
+    finalRev = rev; finalProfit = profit;
+  }
+  tableHTML += '</table>';
+  document.getElementById(`vt-table-${ticker}`).innerHTML = tableHTML;
 
-  document.getElementById(`cr-${ticker}`).innerHTML = `
-    <div class="calc-price" style="color:${upside > 0 ? '#00c853' : '#ff1744'}">$${fv > 0 ? fv.toFixed(2) : '0.00'}</div>
-    <div class="calc-upside ${upside > 0 ? 'green' : 'red'}">${upside > 0 ? '+' : ''}${upside.toFixed(0)}% total &nbsp; ${annReturn > 0 ? '+' : ''}${annReturn.toFixed(1)}%/yr</div>
-    <div style="font-size:12px;color:#666;margin-top:6px">
-      $${s.base.toFixed(2)} \u2192 $${futureBase.toFixed(2)} \u00d7 ${s.useEps ? mult : mult.toFixed(1)} ${s.useEps ? 'P/E' : 'P/S'} &nbsp; | &nbsp; Now: $${s.price.toFixed(2)}
+  // Calculate EPS at end of forecast
+  const finalEPS = finalProfit / s.shares;
+
+  // 3 scenarios
+  const scenarios = [
+    { name: 'Low Valuation', cls: 'low', color: '#ff1744', pe: pelPE },
+    { name: 'Base Valuation', cls: 'mid', color: '#ffd600', pe: basePE },
+    { name: 'High Valuation', cls: 'high', color: '#00c853', pe: highPE },
+  ];
+
+  document.getElementById(`sgrid-${ticker}`).innerHTML = scenarios.map(sc => {
+    const targetPrice = finalEPS * sc.pe;
+    const estMC = targetPrice * s.shares;
+    const annReturn = (targetPrice > 0 && s.price > 0) ? (Math.pow(targetPrice / s.price, 1 / years) - 1) * 100 : 0;
+    const retC = annReturn >= 0 ? '#00c853' : '#ff1744';
+    return `<div class="scenario-card ${sc.cls}">
+      <h5 style="color:${sc.color}">${sc.name}</h5>
+      <div class="sc-row"><span>P/E Multiple:</span> <b>${sc.pe}x</b></div>
+      <div class="sc-row"><span>Target Price:</span> <b style="font-size:16px">$${targetPrice > 0 ? targetPrice.toFixed(2) : '0.00'}</b></div>
+      <div class="sc-row"><span>Est. Market Cap:</span> <b>$${(estMC/1e9).toFixed(0)}B</b></div>
+      <div class="sc-row"><span>Annual Return:</span> <b style="color:${retC}">${annReturn > 0 ? '+' : ''}${annReturn.toFixed(1)}%</b></div>
     </div>`;
+  }).join('');
 }
 
 loadData();

@@ -7,6 +7,51 @@ import requests
 from datetime import date, datetime, timedelta
 
 
+# --- Sector median P/E and P/S (long-run S&P 500 averages) ---
+SECTOR_MEDIANS = {
+    "Technology":             {"pe": 30, "ps": 6.0},
+    "Healthcare":             {"pe": 22, "ps": 4.0},
+    "Financial Services":     {"pe": 14, "ps": 3.0},
+    "Consumer Cyclical":      {"pe": 22, "ps": 1.5},
+    "Communication Services": {"pe": 18, "ps": 3.5},
+    "Industrials":            {"pe": 22, "ps": 2.5},
+    "Consumer Defensive":     {"pe": 22, "ps": 2.0},
+    "Energy":                 {"pe": 12, "ps": 1.5},
+    "Utilities":              {"pe": 18, "ps": 2.5},
+    "Real Estate":            {"pe": 35, "ps": 6.0},
+    "Basic Materials":        {"pe": 14, "ps": 1.5},
+}
+DEFAULT_MEDIANS = {"pe": 20, "ps": 3.0}
+
+
+def _sector_relative_score(value, sector_median):
+    """Score 0-100 based on ratio to sector median.
+    At median -> 60, at 0.5x median -> 100, at 2x median -> 0."""
+    if value is None or value <= 0 or sector_median is None or sector_median <= 0:
+        return None
+    ratio = value / sector_median
+    if ratio <= 0.5:
+        return 100
+    elif ratio <= 1.0:
+        return round(100 - (ratio - 0.5) * 80)   # 100 -> 60
+    elif ratio <= 2.0:
+        return round(60 - (ratio - 1.0) * 60)     # 60 -> 0
+    else:
+        return 0
+
+
+# --- Score thresholds for recommendations ---
+THRESHOLDS = {"strong_buy": 72, "buy": 60, "hold": 40, "sell": 28}
+
+
+def score_to_recommendation(score):
+    if score >= THRESHOLDS["strong_buy"]: return "Strong Buy"
+    if score >= THRESHOLDS["buy"]: return "Buy"
+    if score >= THRESHOLDS["hold"]: return "Hold"
+    if score >= THRESHOLDS["sell"]: return "Sell"
+    return "Strong Sell"
+
+
 def load_config():
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(config_path) as f:
@@ -256,7 +301,7 @@ def fetch_technicals(ticker):
                 valid_timestamps.append(timestamps[i])
 
         current = meta["regularMarketPrice"]
-        prev_close = meta["chartPreviousClose"]
+        prev_close = closes[-2] if len(closes) > 1 else current
         change_pct = round((current - prev_close) / prev_close * 100, 2) if prev_close else 0
 
         # --- INDICATORS ---
@@ -337,16 +382,30 @@ def fetch_technicals(ticker):
         # --- COMPOSITE SCORE (0-100) ---
         score_reasons = []
 
-        # 1. Moving Average Score (0-100, weight 25%)
-        ma_score = 0
-        if sma50 and current > sma50:
-            ma_score += 25; score_reasons.append("Price > SMA50 (+MA)")
-        if sma200 and current > sma200:
-            ma_score += 25; score_reasons.append("Price > SMA200 (+MA)")
-        if sma50 and sma200 and sma50 > sma200:
-            ma_score += 25; score_reasons.append("Golden cross: SMA50 > SMA200 (+MA)")
-        if ema20_val and sma50 and ema20_val > sma50:
-            ma_score += 25; score_reasons.append("EMA20 > SMA50 (+MA)")
+        # 1. Moving Average Score (weight 25%) — allows negative raw, then normalize
+        ma_raw = 0
+        if sma50:
+            if current > sma50:
+                ma_raw += 25; score_reasons.append("Price > SMA50 (+MA)")
+            else:
+                ma_raw -= 10; score_reasons.append("Price < SMA50 (-MA)")
+        if sma200:
+            if current > sma200:
+                ma_raw += 25; score_reasons.append("Price > SMA200 (+MA)")
+            else:
+                ma_raw -= 10; score_reasons.append("Price < SMA200 (-MA)")
+        if sma50 and sma200:
+            if sma50 > sma200:
+                ma_raw += 25; score_reasons.append("Golden cross: SMA50 > SMA200 (+MA)")
+            else:
+                ma_raw -= 25; score_reasons.append("Death cross: SMA50 < SMA200 (-MA)")
+        if ema20_val and sma50:
+            if ema20_val > sma50:
+                ma_raw += 25; score_reasons.append("EMA20 > SMA50 (+MA)")
+            else:
+                ma_raw -= 10; score_reasons.append("EMA20 < SMA50 (-MA)")
+        # Normalize: raw range [-55, +100] -> [0, 100]
+        ma_score = max(0, min(100, round((ma_raw + 55) * 100 / 155)))
 
         # 2. Oscillator Score (0-100, weight 40%)
         osc_raw = 0  # range roughly -70 to +70, normalized later
@@ -403,11 +462,7 @@ def fetch_technicals(ticker):
         composite = (ma_score * 0.25) + (osc_score * 0.40) + (vol_score * 0.20) + (trend_score * 0.15)
         composite = round(composite, 1)
 
-        if composite >= 70: recommendation = "Strong Buy"
-        elif composite >= 55: recommendation = "Buy"
-        elif composite >= 45: recommendation = "Hold"
-        elif composite >= 30: recommendation = "Sell"
-        else: recommendation = "Strong Sell"
+        recommendation = score_to_recommendation(composite)
 
         # 3-month price history for charts
         chart_data = []
@@ -582,23 +637,75 @@ def _score_tier(val, tiers):
     return tiers[-1][1] if tiers else 50
 
 
-def compute_fundamental_score(fund, price, target_mean, num_analysts):
+def compute_quality_score(fund):
+    """Compute simplified Piotroski-style quality score (0-7) from available data."""
+    if not fund:
+        return None, []
+    score = 0
+    details = []
+    # 1. Positive ROA
+    roa = fund.get("returnOnAssets")
+    if roa is not None and roa > 0:
+        score += 1; details.append("ROA+")
+    # 2. Positive operating cash flow
+    ocf = fund.get("operatingCashflow")
+    if ocf is not None and ocf > 0:
+        score += 1; details.append("OCF+")
+    # 3. Accrual quality: OCF > net income
+    pm = fund.get("profitMargins")
+    rev = fund.get("totalRevenue")
+    if ocf and pm is not None and rev and rev > 0:
+        if ocf > pm * rev:
+            score += 1; details.append("Accrual quality")
+    # 4. Positive FCF
+    fcf = fund.get("freeCashflow")
+    if fcf is not None and fcf > 0:
+        score += 1; details.append("FCF+")
+    # 5. Low leverage
+    de = fund.get("debtToEquity")
+    if de is not None and de < 100:
+        score += 1; details.append("Low D/E")
+    # 6. Adequate liquidity
+    cr = fund.get("currentRatio")
+    if cr is not None and cr > 1.0:
+        score += 1; details.append("Liquid")
+    # 7. Earnings growing
+    eg = fund.get("earningsGrowth")
+    if eg is not None and eg > 0:
+        score += 1; details.append("EPS growing")
+    return score, details
+
+
+def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=None):
     """Compute 0-100 fundamental score from valuation, profitability, growth, health, and price target."""
     if not fund:
         return 50, []
     reasons = []
 
-    # 1. Valuation (25%)
-    pe = _score_tier(fund.get("trailingPE"), [(15, 100), (20, 75), (30, 50), (40, 25)])
-    if fund.get("trailingPE") and fund["trailingPE"] < 0:
+    # 1. Valuation (25%) — sector-relative P/E and P/S
+    sector_key = sector or fund.get("sector")
+    medians = SECTOR_MEDIANS.get(sector_key, DEFAULT_MEDIANS)
+
+    pe_val = fund.get("trailingPE")
+    if pe_val is not None and pe_val < 0:
         pe = 25  # Negative earnings
+    else:
+        pe = _sector_relative_score(pe_val, medians["pe"])
+        if pe is None:
+            pe = 50
+
+    ps_val = fund.get("priceToSales")
+    ps = _sector_relative_score(ps_val, medians["ps"])
+    if ps is None:
+        ps = 50
+
     peg = _score_tier(fund.get("pegRatio"), [(1, 100), (1.5, 75), (2, 50), (3, 25)])
     pb = _score_tier(fund.get("priceToBook"), [(3, 75), (5, 50), (10, 25)])
-    val_score = (pe + peg + pb) / 3
+    val_score = pe * 0.35 + ps * 0.20 + peg * 0.25 + pb * 0.20
     if val_score >= 70:
-        reasons.append(f"Attractive valuation (P/E={fund.get('trailingPE', 'N/A')}) (+Fund)")
+        reasons.append(f"Attractive valuation vs {sector_key or 'market'} (P/E={pe_val}, median={medians['pe']}) (+Fund)")
     elif val_score <= 30:
-        reasons.append(f"Expensive valuation (P/E={fund.get('trailingPE', 'N/A')}) (-Fund)")
+        reasons.append(f"Expensive valuation vs {sector_key or 'market'} (P/E={pe_val}, median={medians['pe']}) (-Fund)")
 
     # 2. Profitability (20%)
     gm = _score_tier(fund.get("grossMargins"), [(-999, 0)]) if fund.get("grossMargins") is None else (
@@ -630,15 +737,16 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts):
     elif grow_score <= 30:
         reasons.append(f"Weak growth (-Fund)")
 
-    # 4. Financial Health (15%)
-    de = 50
-    if fund.get("debtToEquity") is not None:
-        de = 100 if fund["debtToEquity"] < 50 else 75 if fund["debtToEquity"] < 100 else 50 if fund["debtToEquity"] < 200 else 25
-    cr = 50
-    if fund.get("currentRatio") is not None:
-        cr = 100 if fund["currentRatio"] > 2 else 75 if fund["currentRatio"] > 1.5 else 50 if fund["currentRatio"] > 1 else 25
-    fcf = 75 if fund.get("freeCashflow") and fund["freeCashflow"] > 0 else 25
-    health_score = (de + cr + fcf) / 3
+    # 4. Financial Health (15%) — quality score (0-7, Piotroski-inspired)
+    quality, quality_details = compute_quality_score(fund)
+    if quality is not None:
+        health_score = round(quality / 7 * 100)
+        if quality >= 6:
+            reasons.append(f"Strong quality ({quality}/7: {', '.join(quality_details[:3])}) (+Fund)")
+        elif quality <= 2:
+            reasons.append(f"Weak quality ({quality}/7) (-Fund)")
+    else:
+        health_score = 50
 
     # 5. Price Target (20%)
     pt_score = 50
@@ -685,28 +793,24 @@ def merge_fundamentals(technicals, fund_data):
 
     # Compute fundamental score
     fund_score, fund_reasons = compute_fundamental_score(
-        fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts")
+        fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts"),
+        sector=fund.get("sector"),
     )
     technicals["fund_score"] = fund_score
     technicals["fund_score_reasons"] = fund_reasons
+    quality, quality_details = compute_quality_score(fund)
+    technicals["quality_score"] = quality
+    technicals["quality_details"] = quality_details
 
     # Combined score: tech 40%, fundamental 60%
     combined = round(tech_score * 0.40 + fund_score * 0.60, 1)
     technicals["combined_score"] = combined
 
     # Recommendation from combined score
-    if combined >= 70: technicals["recommendation"] = "Strong Buy"
-    elif combined >= 55: technicals["recommendation"] = "Buy"
-    elif combined >= 45: technicals["recommendation"] = "Hold"
-    elif combined >= 30: technicals["recommendation"] = "Sell"
-    else: technicals["recommendation"] = "Strong Sell"
+    technicals["recommendation"] = score_to_recommendation(combined)
 
     # Keep pure technical recommendation
-    if tech_score >= 70: technicals["tech_recommendation"] = "Strong Buy"
-    elif tech_score >= 55: technicals["tech_recommendation"] = "Buy"
-    elif tech_score >= 45: technicals["tech_recommendation"] = "Hold"
-    elif tech_score >= 30: technicals["tech_recommendation"] = "Sell"
-    else: technicals["tech_recommendation"] = "Strong Sell"
+    technicals["tech_recommendation"] = score_to_recommendation(tech_score)
 
     # Merge reasons
     technicals["score_reasons"] = technicals.get("score_reasons", []) + fund_reasons
@@ -871,7 +975,7 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     return f"""You are a stock market analyst advising a long-term investor.
 Produce a Telegram message briefing {time_context} using ALL the data below.
 
-YOUR ROLE: Our scoring algorithm (0-100, based on RSI, MACD, SMA, volume, ADX, and analyst price targets) has pre-computed BUY/HOLD/SELL decisions shown in the data. Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
+YOUR ROLE: Our scoring algorithm (0-100, Tech 40% + Fundamental 60%) has pre-computed decisions: Strong Buy (72+), Buy (60-71), Hold (40-59), Sell (28-39), Strong Sell (<28). Fundamentals include sector-relative valuation and a 0-7 quality score. Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
 
 FORMAT RULES (strict):
 - Keep under 3900 characters total.
