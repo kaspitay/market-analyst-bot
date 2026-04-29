@@ -759,15 +759,15 @@ function initFH(ticker) {
   const el = document.getElementById('fh-' + ticker);
   if (!fh || !fh.length) { el.innerHTML = '<span class="fh-empty">No historical financial data available</span>'; fhState[ticker] = true; return; }
 
-  fh.forEach(d => { d.grossMargin = (d.grossProfit != null && d.totalRevenue) ? +(d.grossProfit / d.totalRevenue * 100).toFixed(1) : null; });
+  fh.forEach(d => { d.netMargin = (d.netIncome != null && d.totalRevenue) ? +(d.netIncome / d.totalRevenue * 100).toFixed(1) : null; });
   const years = fh.map(d => d.year);
   const charts = [
     { key: 'totalRevenue', label: 'Total Revenue', fmt: '$' },
-    { key: 'grossMargin', label: 'Gross Margin %', fmt: '%' },
+    { key: 'grossProfit', label: 'Gross Profit', fmt: '$' },
     { key: 'operatingIncome', label: 'Operating Income', fmt: '$' },
     { key: 'netIncome', label: 'Net Income', fmt: '$' },
     { key: 'eps', label: 'Diluted EPS', fmt: 'n' },
-    { key: 'stockholderEquity', label: 'Shareholder Equity', fmt: '$' },
+    { key: 'netMargin', label: 'Net Margin %', fmt: '%' },
   ];
 
   let html = '<div class="fh-grid">';
