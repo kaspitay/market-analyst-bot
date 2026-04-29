@@ -466,7 +466,7 @@ def fetch_fundamentals(ticker):
     if not _yf_crumb:
         return None
     try:
-        modules = "financialData,defaultKeyStatistics,summaryDetail,earningsTrend"
+        modules = "financialData,defaultKeyStatistics,summaryDetail,earningsTrend,summaryProfile,calendarEvents"
         result = subprocess.run(
             ["curl", "-s", "-b", _yf_cookie_file,
              f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={modules}&crumb={_yf_crumb}",
@@ -479,6 +479,8 @@ def fetch_fundamentals(ticker):
         dks = q.get("defaultKeyStatistics", {})
         sd = q.get("summaryDetail", {})
         et = q.get("earningsTrend", {})
+        sp = q.get("summaryProfile", {})
+        ce = q.get("calendarEvents", {}).get("earnings", {})
 
         def g(obj, key):
             v = obj.get(key, {})
@@ -502,7 +504,22 @@ def fetch_fundamentals(ticker):
         shares = round(market_cap / price) if market_cap and price and price > 0 else None
         rev_per_share = round(total_revenue / shares, 2) if total_revenue and shares else None
 
+        # Extract next earnings date from calendarEvents
+        earnings_dates = ce.get("earningsDate", [])
+        next_earnings_date = None
+        if earnings_dates:
+            raw_ts = earnings_dates[0].get("fmt") or earnings_dates[0].get("raw")
+            if isinstance(raw_ts, str):
+                next_earnings_date = raw_ts
+            elif isinstance(raw_ts, (int, float)):
+                next_earnings_date = date.fromtimestamp(raw_ts).isoformat()
+        earnings_eps_est = g(ce, "earningsAverage")
+
         return {
+            "earnings": {
+                "date": next_earnings_date,
+                "eps_est": earnings_eps_est,
+            },
             "price_target": {
                 "target_high": g(fd, "targetHighPrice"),
                 "target_low": g(fd, "targetLowPrice"),
@@ -547,6 +564,7 @@ def fetch_fundamentals(ticker):
                 "marketCap": market_cap,
                 "sharesOutstanding": shares,
                 "revenuePerShare": rev_per_share,
+                "sector": sp.get("sector"),
             },
         }
     except Exception as e:
@@ -646,6 +664,10 @@ def merge_fundamentals(technicals, fund_data):
 
     pt = fund_data.get("price_target", {}) if fund_data else {}
     fund = fund_data.get("fundamentals", {}) if fund_data else {}
+    earn = fund_data.get("earnings", {}) if fund_data else {}
+
+    # Earnings date from Yahoo Finance calendarEvents
+    technicals["next_earnings"] = earn if earn and earn.get("date") else None
 
     # Price target fields
     technicals["target_high"] = pt.get("target_high")
@@ -692,33 +714,6 @@ def merge_fundamentals(technicals, fund_data):
     return technicals
 
 
-def fetch_earnings(tickers, api_key):
-    try:
-        today = date.today()
-        end = today + timedelta(days=14)
-        resp = requests.get(
-            "https://finnhub.io/api/v1/calendar/earnings",
-            params={"from": today.isoformat(), "to": end.isoformat(), "token": api_key},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        ticker_set = set(tickers)
-        earnings = []
-        for e in data.get("earningsCalendar", []):
-            if e.get("symbol") in ticker_set:
-                hour_map = {"bmo": "Before Open", "amc": "After Close", "": "TBD"}
-                earnings.append({
-                    "symbol": e["symbol"],
-                    "date": e["date"],
-                    "hour": hour_map.get(e.get("hour", ""), "TBD"),
-                    "eps_est": e.get("epsEstimate"),
-                })
-        earnings.sort(key=lambda x: x["date"])
-        return earnings
-    except Exception as e:
-        print(f"Warning: failed to fetch earnings: {e}")
-        return []
 
 
 def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type):
@@ -1091,7 +1086,6 @@ def main():
     market_news = fetch_market_news(finnhub_key)
     fg_data = fetch_fear_greed_data()
     vix = fetch_vix()
-    earnings = fetch_earnings(all_tickers, finnhub_key)
 
     # Initialize Yahoo Finance auth for price targets
     init_yahoo_auth()
@@ -1105,6 +1099,28 @@ def main():
         fund_data = fetch_fundamentals(ticker)
         technicals[ticker] = merge_fundamentals(technicals[ticker], fund_data)
         time.sleep(0.2)  # Rate limit Yahoo Finance
+
+    # Build earnings list from Yahoo Finance calendarEvents (per-ticker)
+    today = date.today()
+    earnings_horizon = today + timedelta(days=14)
+    earnings = []
+    for ticker in all_tickers:
+        tech = technicals.get(ticker) or {}
+        ne = tech.get("next_earnings")
+        if ne and ne.get("date"):
+            try:
+                edate = date.fromisoformat(ne["date"])
+                if today <= edate <= earnings_horizon:
+                    earnings.append({
+                        "symbol": ticker,
+                        "date": ne["date"],
+                        "hour": "TBD",
+                        "eps_est": ne.get("eps_est"),
+                    })
+            except (ValueError, TypeError):
+                pass
+    earnings.sort(key=lambda x: x["date"])
+    print(f"Earnings found (Yahoo Finance): {len(earnings)} tickers in next 14 days")
 
     # Fetch news for portfolio holdings
     portfolio_news = {}
