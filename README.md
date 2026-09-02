@@ -34,16 +34,16 @@ Based on OHLCV data from Yahoo Finance:
 
 ### Fundamental Score (0-100)
 Based on Yahoo Finance quoteSummary (financialData, defaultKeyStatistics, summaryDetail, earningsTrend):
-- **Valuation (25%)** — P/E, PEG, P/B
+- **Valuation (25%)** — P/E, P/S (both sector-relative), PEG, P/B
 - **Profitability (20%)** — Gross/Operating margins, ROE
 - **Growth (20%)** — Revenue growth, earnings growth, analyst estimates
-- **Financial Health (15%)** — Debt/Equity, current ratio, FCF
+- **Financial Health (15%)** — 7-point quality score (ROA, operating cash flow, accruals, FCF, Debt/Equity, current ratio, EPS growth)
 - **Price Targets (20%)** — Analyst consensus upside/downside
 
 ### Combined Score
 **Technical (40%) + Fundamental (60%)** — biased toward long-term investing.
 
-Recommendation thresholds: Strong Buy (70+), Buy (55+), Hold (45+), Sell (30+), Strong Sell (<30).
+Recommendation thresholds: Strong Buy (72+), Buy (60+), Hold (40+), Sell (28+), Strong Sell (<28).
 
 ## 5-Year Price Calculator
 

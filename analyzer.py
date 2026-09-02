@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import math
 import subprocess
 import time
 import requests
@@ -22,6 +23,19 @@ SECTOR_MEDIANS = {
     "Basic Materials":        {"pe": 14, "ps": 1.5},
 }
 DEFAULT_MEDIANS = {"pe": 20, "ps": 3.0}
+
+
+def _num(v):
+    """Coerce a Yahoo numeric field to a real number, or None if it isn't one.
+
+    Yahoo emits the string "Infinity" for ratios whose denominator collapses
+    (trailingPE when earnings round to ~0), and occasionally a non-finite float.
+    Both must read as missing data — otherwise every downstream comparison and
+    f-string format raises.
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v if math.isfinite(v) else None
 
 
 def _sector_relative_score(value, sector_median):
@@ -67,12 +81,19 @@ def curl_json(url):
 
 
 def fetch_company_news(ticker, api_key):
-    today = date.today().isoformat()
+    # A same-day UTC window means the 07:30 ET run only sees 20:00 ET yesterday
+    # onward, missing the whole prior trading day (and all weekend on Mondays).
     url = "https://finnhub.io/api/v1/company-news"
-    params = {"symbol": ticker, "from": today, "to": today, "token": api_key}
+    params = {
+        "symbol": ticker,
+        "from": (date.today() - timedelta(days=4)).isoformat(),
+        "to": date.today().isoformat(),
+        "token": api_key,
+    }
     resp = requests.get(url, params=params, timeout=10)
     resp.raise_for_status()
-    articles = resp.json()[:3]
+    # Sort newest-first ourselves rather than relying on Finnhub's ordering.
+    articles = sorted(resp.json(), key=lambda a: a.get("datetime") or 0, reverse=True)[:3]
     return [{"headline": a["headline"], "summary": a["summary"]} for a in articles]
 
 
@@ -447,7 +468,7 @@ def fetch_technicals(ticker):
             vol_raw += 15; score_reasons.append("OBV bullish divergence (+Vol)")
         elif obv_divergence == "bearish":
             vol_raw -= 15; score_reasons.append("OBV bearish divergence (-Vol)")
-        vol_score = max(0, min(100, (vol_raw + 65) / 1.3))
+        vol_score = max(0, min(100, vol_raw + 50))
 
         # 4. Trend Strength Score (0-100, weight 15%)
         if adx:
@@ -539,7 +560,7 @@ def fetch_fundamentals(ticker):
 
         def g(obj, key):
             v = obj.get(key, {})
-            return v.get("raw") if isinstance(v, dict) else None
+            return _num(v.get("raw")) if isinstance(v, dict) else None
 
         # Earnings trend growth rates
         trends = et.get("trend", [])
@@ -547,9 +568,9 @@ def fetch_fundamentals(ticker):
         ny_growth = None
         try:
             if len(trends) > 2:
-                cy_growth = trends[2].get("growth", {}).get("raw")
+                cy_growth = _num(trends[2].get("growth", {}).get("raw"))
             if len(trends) > 3:
-                ny_growth = trends[3].get("growth", {}).get("raw")
+                ny_growth = _num(trends[3].get("growth", {}).get("raw"))
         except Exception:
             pass
 
@@ -660,7 +681,7 @@ def fetch_financial_history(ticker):
             by_type[short] = {}
             for p in points:
                 if p and "reportedValue" in p:
-                    by_type[short][p["asOfDate"]] = p["reportedValue"]["raw"]
+                    by_type[short][p["asOfDate"]] = _num(p["reportedValue"].get("raw"))
 
         # Collect all dates, build per-year records
         all_dates = sorted(set(d for m in by_type.values() for d in m))
@@ -682,10 +703,14 @@ def fetch_financial_history(ticker):
         return None
 
 
-def _score_tier(val, tiers):
+def _score_tier(val, tiers, neg_score=25):
     """Score a value against [(threshold, score), ...] tiers. Returns score for first matching tier."""
     if val is None:
         return 50
+    if val < 0:
+        # A negative PEG or P/B means collapsing earnings or negative book equity,
+        # not a bargain. Without this it satisfies the first (best) tier.
+        return neg_score
     for threshold, score in tiers:
         if val <= threshold:
             return score
@@ -718,7 +743,7 @@ def compute_quality_score(fund):
         score += 1; details.append("FCF+")
     # 5. Low leverage
     de = fund.get("debtToEquity")
-    if de is not None and de < 100:
+    if de is not None and 0 <= de < 100:
         score += 1; details.append("Low D/E")
     # 6. Adequate liquidity
     cr = fund.get("currentRatio")
@@ -774,7 +799,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
         roe = 100 if fund["returnOnEquity"] > 0.2 else 75 if fund["returnOnEquity"] > 0.1 else 50 if fund["returnOnEquity"] > 0 else 25
     prof_score = (gm + om + roe) / 3
     if prof_score >= 70:
-        reasons.append(f"Strong profitability (GM={fund.get('grossMargins', 0):.0%}, ROE={fund.get('returnOnEquity', 0):.0%}) (+Fund)")
+        reasons.append(f"Strong profitability (GM={fund.get('grossMargins') or 0:.0%}, ROE={fund.get('returnOnEquity') or 0:.0%}) (+Fund)")
 
     # 3. Growth (20%)
     def growth_score(val):
@@ -1241,8 +1266,13 @@ def main():
     watchlist = config["watchlist"]
     all_tickers = list(portfolio.keys()) + watchlist
 
-    # Fetch market data
-    market_news = fetch_market_news(finnhub_key)
+    # Fetch market data. Market news only feeds the briefing prompt, so a Finnhub
+    # outage must not abort the run before the dashboard data is fetched.
+    try:
+        market_news = fetch_market_news(finnhub_key)
+    except Exception as e:
+        print(f"Warning: failed to fetch market news: {e}")
+        market_news = []
     fg_data = fetch_fear_greed_data()
     vix = fetch_vix()
 
@@ -1307,6 +1337,12 @@ def main():
         indicators["fear_greed"] = fg_data["fear_greed"]
         indicators["indices"] = fg_data["indices"]
         indicators["calendar"] = fg_data["calendar"]
+    # Save dashboard data before the AI/Telegram legs: all market data is already
+    # fetched here, and the dashboard must not go stale just because Gemini or
+    # Telegram is down.
+    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
+    print("Dashboard data saved")
+
     prompt = build_prompt(
         portfolio_news, watchlist_news, market_news,
         indicators, earnings, portfolio, watchlist, technicals, briefing_type,
@@ -1317,8 +1353,6 @@ def main():
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")
 
-    # Save data for dashboard
-    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
     save_briefing_history(briefing_type, analysis)
 
     # Cleanup
