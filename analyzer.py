@@ -26,16 +26,10 @@ DEFAULT_MEDIANS = {"pe": 20, "ps": 3.0}
 
 
 def _num(v):
-    """Coerce a Yahoo numeric field to a real number, or None if it isn't one.
-
-    Yahoo emits the string "Infinity" for ratios whose denominator collapses
-    (trailingPE when earnings round to ~0), and occasionally a non-finite float.
-    Both must read as missing data — otherwise every downstream comparison and
-    f-string format raises.
-    """
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return None
-    return v if math.isfinite(v) else None
+    # Yahoo emits the string "Infinity" for ratios whose denominator collapses
+    # (trailingPE at ~zero earnings); it must read as missing, not crash the
+    # comparisons and f-string formats downstream.
+    return v if isinstance(v, (int, float)) and math.isfinite(v) else None
 
 
 def _sector_relative_score(value, sector_median):
@@ -703,14 +697,14 @@ def fetch_financial_history(ticker):
         return None
 
 
-def _score_tier(val, tiers, neg_score=25):
+def _score_tier(val, tiers):
     """Score a value against [(threshold, score), ...] tiers. Returns score for first matching tier."""
     if val is None:
         return 50
     if val < 0:
         # A negative PEG or P/B means collapsing earnings or negative book equity,
         # not a bargain. Without this it satisfies the first (best) tier.
-        return neg_score
+        return 25
     for threshold, score in tiers:
         if val <= threshold:
             return score
@@ -1341,7 +1335,6 @@ def main():
     # fetched here, and the dashboard must not go stale just because Gemini or
     # Telegram is down.
     save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
-    print("Dashboard data saved")
 
     prompt = build_prompt(
         portfolio_news, watchlist_news, market_news,
