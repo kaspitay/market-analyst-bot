@@ -6,3 +6,4 @@ __pycache__/
 .DS_Store
 docs/config.js
 specs/
+!docs/superpowers/specs/
