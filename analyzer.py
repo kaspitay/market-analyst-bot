@@ -34,7 +34,7 @@ def _num(v):
 
 def _sector_relative_score(value, sector_median):
     """Score 0-100 based on ratio to sector median.
-    At median -> 60, at 0.5x median -> 100, at 2x median -> 0."""
+    At 0.5x median -> 100, at median -> 60, decaying toward 0 above it."""
     if value is None or value <= 0 or sector_median is None or sector_median <= 0:
         return None
     ratio = value / sector_median
@@ -42,11 +42,11 @@ def _sector_relative_score(value, sector_median):
         return 100
     elif ratio <= 1.0:
         return round(100 - (ratio - 0.5) * 80)   # 100 -> 60
-    elif ratio <= 2.0:
-        return round(60 - (ratio - 1.0) * 60)     # 60 -> 0
     else:
-        # A flat 0 above 2x median left 15 of 53 tickers tied on P/E and 28 on
-        # P/S with no ordering at all; this decay separates 10.6x from 2.1x.
+        # One decay over the whole expensive half. A flat 0 above 2x median left
+        # 15 of 53 tickers tied on P/E and 28 on P/S with no ordering; the old
+        # linear 60->0 ramp below 2x then inverted against it (1.99x scored 1,
+        # 2.01x scored 21). This is continuous at ratio 1.0, where it equals 60.
         return round(60 / ratio ** 1.5)
 
 
@@ -787,16 +787,18 @@ def compute_quality_score(fund, financial_history=None):
 
 def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=None,
                               financial_history=None):
-    """Compute 0-100 fundamental score from valuation, profitability, growth, health, and price target.
+    """Compute 0-100 fundamental score from valuation, profitability, growth and health.
 
     Returns (score, reasons), or (None, []) when there are no fundamentals at
     all — a ticker with no data must abstain, not read as a neutral "Hold".
+    The analyst price target is reported in `reasons` but is deliberately not
+    part of the score: it is sentiment, not a fundamental.
     """
     if not fund:
         return None, []
     reasons = []
 
-    # 1. Valuation (25%) — sector-relative P/E and P/S
+    # 1. Valuation (0.20) — sector-relative P/E and P/S
     sector_key = sector or fund.get("sector")
     medians = SECTOR_MEDIANS.get(sector_key, DEFAULT_MEDIANS)
 
@@ -830,7 +832,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     elif val_score <= 30:
         reasons.append(f"Expensive valuation vs {sector_key or 'market'} (P/E={pe_val}, median={medians['pe']}) (-Fund)")
 
-    # 2. Profitability (20%)
+    # 2. Profitability (0.25)
     gm = 50
     if fund.get("grossMargins") is not None:
         gm = 100 if fund["grossMargins"] > 0.5 else 75 if fund["grossMargins"] > 0.3 else 50 if fund["grossMargins"] > 0.15 else 25
@@ -844,7 +846,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     if prof_score >= 70:
         reasons.append(f"Strong profitability (GM={fund.get('grossMargins') or 0:.0%}, ROE={fund.get('returnOnEquity') or 0:.0%}) (+Fund)")
 
-    # 3. Growth (20%)
+    # 3. Growth (0.20)
     def growth_score(val):
         if val is None: return 50
         if val > 0.25: return 100
@@ -860,10 +862,13 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     elif grow_score <= 30:
         reasons.append(f"Weak growth (-Fund)")
 
-    # 4. Financial Health (15%) — Piotroski F-score, 0-8. Signals with missing
-    # inputs abstain, so the denominator is what was actually measurable.
+    # 4. Financial Health (0.35) — Piotroski F-score, 0-8. Signals with missing
+    # inputs abstain, so the denominator is what was actually measurable. With no
+    # measurable signal at all health is None, and its weight is renormalised
+    # away below rather than scored as a neutral 50.
     signals = _f_score_signals(financial_history)
     known = [ok for _, ok in signals if ok is not None]
+    health_score = None
     if known:
         quality = sum(known)
         quality_details = [label for label, ok in signals if ok]
@@ -872,23 +877,16 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
             reasons.append(f"Strong quality ({quality}/{len(known)}: {', '.join(quality_details[:3])}) (+Fund)")
         elif quality <= 2:
             reasons.append(f"Weak quality ({quality}/{len(known)}) (-Fund)")
-    else:
-        health_score = 50
 
-    # 5. Price Target (20%)
-    pt_score = 50
+    # The analyst price target is display-only. It is sentiment, and at 20% of
+    # the weight it was the single largest term in a score labelled fundamental.
     if target_mean and price and num_analysts:
         upside = ((target_mean - price) / price) * 100
-        if upside > 20: pt_score = 100
-        elif upside > 10: pt_score = 80
-        elif upside > 0: pt_score = 60
-        elif upside > -10: pt_score = 40
-        else: pt_score = 20
-        if num_analysts and num_analysts < 5:
-            pt_score = (pt_score + 50) / 2
         reasons.append(f"Analyst target ${target_mean:.0f} ({upside:+.0f}%)")
 
-    fund_total = val_score * 0.25 + prof_score * 0.20 + grow_score * 0.20 + health_score * 0.15 + pt_score * 0.20
+    legs = [(0.20, val_score), (0.25, prof_score), (0.20, grow_score), (0.35, health_score)]
+    coverage = sum(w for w, v in legs if v is not None)
+    fund_total = sum(w * v for w, v in legs if v is not None) / coverage
     return round(fund_total, 1), reasons
 
 
