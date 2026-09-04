@@ -45,7 +45,9 @@ def _sector_relative_score(value, sector_median):
     elif ratio <= 2.0:
         return round(60 - (ratio - 1.0) * 60)     # 60 -> 0
     else:
-        return 0
+        # A flat 0 above 2x median left 15 of 53 tickers tied on P/E and 28 on
+        # P/S with no ordering at all; this decay separates 10.6x from 2.1x.
+        return round(60 / ratio ** 1.5)
 
 
 # --- Score thresholds for recommendations ---
@@ -727,49 +729,71 @@ def _score_tier(val, tiers):
     return tiers[-1][1] if tiers else 50
 
 
-def compute_quality_score(fund):
-    """Compute simplified Piotroski-style quality score (0-7) from available data."""
+def _f_score_signals(financial_history):
+    """The 8 Piotroski F-score signals as [(label, True | False | None), ...].
+
+    None means an input was missing, so the signal *abstains*: callers must drop
+    it from the denominator rather than score it as a failure. The old checklist
+    scored a non-Piotroski "positive FCF" and a levels-only D/E test, which
+    together punished every self-funded capex buildout for free; canonical
+    Piotroski uses operating cash flow and never looks at capex.
+    """
+    rows = financial_history or []
+    cur = rows[-1] if rows else {}
+    prev = rows[-2] if len(rows) >= 2 else {}
+
+    def ratio(row, num_key, den_key):
+        num, den = row.get(num_key), row.get(den_key)
+        return None if num is None or not den else num / den
+
+    def gt(a, b):
+        return None if a is None or b is None else a > b
+
+    roa, roa_prev = ratio(cur, "netIncome", "totalAssets"), ratio(prev, "netIncome", "totalAssets")
+    lev, lev_prev = ratio(cur, "totalDebt", "totalAssets"), ratio(prev, "totalDebt", "totalAssets")
+    gm, gm_prev = ratio(cur, "grossProfit", "totalRevenue"), ratio(prev, "grossProfit", "totalRevenue")
+    turn, turn_prev = ratio(cur, "totalRevenue", "totalAssets"), ratio(prev, "totalRevenue", "totalAssets")
+    cfo, net_income = cur.get("operatingCashFlow"), cur.get("netIncome")
+    shares, shares_prev = cur.get("dilutedAverageShares"), prev.get("dilutedAverageShares")
+
+    return [
+        ("ROA+",            None if roa is None else roa > 0),
+        ("OCF+",            None if cfo is None else cfo > 0),
+        ("ROA rising",      gt(roa, roa_prev)),
+        ("Accrual quality", gt(cfo, net_income)),
+        ("Deleveraging",    gt(lev_prev, lev)),
+        # 1% tolerance: routine option vesting is not a capital raise.
+        ("No dilution",     None if shares is None or shares_prev is None else shares <= shares_prev * 1.01),
+        ("GM rising",       gt(gm, gm_prev)),
+        ("Asset turns up",  gt(turn, turn_prev)),
+    ]
+
+
+def compute_quality_score(fund, financial_history=None):
+    """Piotroski-style F-score (0-8) from annual financial history.
+
+    Returns (passed, details) — the count of signals that passed and the labels
+    of those signals — or (None, []) when no signal was computable at all. With
+    no history nothing is computable: every signal reads the per-year records,
+    and deliberately does not fall back to `fund`'s own point-in-time fields,
+    which would fake coverage from data that cannot supply a year-over-year
+    delta. `fund` is kept in the signature for callers that pass it positionally.
+    """
+    known = [(label, ok) for label, ok in _f_score_signals(financial_history) if ok is not None]
+    if not known:
+        return None, []
+    return sum(ok for _, ok in known), [label for label, ok in known if ok]
+
+
+def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=None,
+                              financial_history=None):
+    """Compute 0-100 fundamental score from valuation, profitability, growth, health, and price target.
+
+    Returns (score, reasons), or (None, []) when there are no fundamentals at
+    all — a ticker with no data must abstain, not read as a neutral "Hold".
+    """
     if not fund:
         return None, []
-    score = 0
-    details = []
-    # 1. Positive ROA
-    roa = fund.get("returnOnAssets")
-    if roa is not None and roa > 0:
-        score += 1; details.append("ROA+")
-    # 2. Positive operating cash flow
-    ocf = fund.get("operatingCashflow")
-    if ocf is not None and ocf > 0:
-        score += 1; details.append("OCF+")
-    # 3. Accrual quality: OCF > net income
-    pm = fund.get("profitMargins")
-    rev = fund.get("totalRevenue")
-    if ocf and pm is not None and rev and rev > 0:
-        if ocf > pm * rev:
-            score += 1; details.append("Accrual quality")
-    # 4. Positive FCF
-    fcf = fund.get("freeCashflow")
-    if fcf is not None and fcf > 0:
-        score += 1; details.append("FCF+")
-    # 5. Low leverage
-    de = fund.get("debtToEquity")
-    if de is not None and 0 <= de < 100:
-        score += 1; details.append("Low D/E")
-    # 6. Adequate liquidity
-    cr = fund.get("currentRatio")
-    if cr is not None and cr > 1.0:
-        score += 1; details.append("Liquid")
-    # 7. Earnings growing
-    eg = fund.get("earningsGrowth")
-    if eg is not None and eg > 0:
-        score += 1; details.append("EPS growing")
-    return score, details
-
-
-def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=None):
-    """Compute 0-100 fundamental score from valuation, profitability, growth, health, and price target."""
-    if not fund:
-        return 50, []
     reasons = []
 
     # 1. Valuation (25%) — sector-relative P/E and P/S
@@ -789,8 +813,17 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     if ps is None:
         ps = 50
 
-    peg = _score_tier(fund.get("pegRatio"), [(1, 100), (1.5, 75), (2, 50), (3, 25)])
-    pb = _score_tier(fund.get("priceToBook"), [(3, 75), (5, 50), (10, 25)])
+    # Both tier lists end at a real floor and start at a real ceiling, so a P/B
+    # of 500 no longer scores the same as a P/B of 9.5.
+    peg_val = fund.get("pegRatio")
+    peg = _score_tier(peg_val, [(1, 100), (1.5, 75), (2, 50), (3, 25), (5, 10), (math.inf, 0)])
+    earnings_growth = fund.get("earningsGrowth")
+    if peg >= 75 and (earnings_growth is None or earnings_growth <= 0.02
+                      or not 0.05 <= peg_val <= 20):
+        # A low PEG on flat or shrinking earnings is a value trap, not a bargain
+        # (NICE: PEG 0.62 against earningsGrowth -0.617).
+        peg = 50
+    pb = _score_tier(fund.get("priceToBook"), [(1, 100), (3, 75), (5, 50), (10, 25), (20, 10), (math.inf, 0)])
     val_score = pe * 0.35 + ps * 0.20 + peg * 0.25 + pb * 0.20
     if val_score >= 70:
         reasons.append(f"Attractive valuation vs {sector_key or 'market'} (P/E={pe_val}, median={medians['pe']}) (+Fund)")
@@ -798,9 +831,9 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
         reasons.append(f"Expensive valuation vs {sector_key or 'market'} (P/E={pe_val}, median={medians['pe']}) (-Fund)")
 
     # 2. Profitability (20%)
-    gm = _score_tier(fund.get("grossMargins"), [(-999, 0)]) if fund.get("grossMargins") is None else (
-        100 if fund["grossMargins"] > 0.5 else 75 if fund["grossMargins"] > 0.3 else 50 if fund["grossMargins"] > 0.15 else 25
-    )
+    gm = 50
+    if fund.get("grossMargins") is not None:
+        gm = 100 if fund["grossMargins"] > 0.5 else 75 if fund["grossMargins"] > 0.3 else 50 if fund["grossMargins"] > 0.15 else 25
     om = 50
     if fund.get("operatingMargins") is not None:
         om = 100 if fund["operatingMargins"] > 0.2 else 75 if fund["operatingMargins"] > 0.1 else 50 if fund["operatingMargins"] > 0 else 25
@@ -827,14 +860,18 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     elif grow_score <= 30:
         reasons.append(f"Weak growth (-Fund)")
 
-    # 4. Financial Health (15%) — quality score (0-7, Piotroski-inspired)
-    quality, quality_details = compute_quality_score(fund)
-    if quality is not None:
-        health_score = round(quality / 7 * 100)
+    # 4. Financial Health (15%) — Piotroski F-score, 0-8. Signals with missing
+    # inputs abstain, so the denominator is what was actually measurable.
+    signals = _f_score_signals(financial_history)
+    known = [ok for _, ok in signals if ok is not None]
+    if known:
+        quality = sum(known)
+        quality_details = [label for label, ok in signals if ok]
+        health_score = round(quality / len(known) * 100)
         if quality >= 6:
-            reasons.append(f"Strong quality ({quality}/7: {', '.join(quality_details[:3])}) (+Fund)")
+            reasons.append(f"Strong quality ({quality}/{len(known)}: {', '.join(quality_details[:3])}) (+Fund)")
         elif quality <= 2:
-            reasons.append(f"Weak quality ({quality}/7) (-Fund)")
+            reasons.append(f"Weak quality ({quality}/{len(known)}) (-Fund)")
     else:
         health_score = 50
 
@@ -855,7 +892,51 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     return round(fund_total, 1), reasons
 
 
-def merge_fundamentals(technicals, fund_data):
+def veto_gates(fund, financial_history, ticker, ocf_veto_exempt):
+    """Hard score ceilings. Returns (reason, cap) for the tightest gate that
+    fires, or (None, None).
+
+    A gate whose input is missing abstains — it is skipped, never treated as
+    passed. `ocf_veto_exempt` lists tickers whose negative operating cash flow
+    is structural rather than distress (lenders originating loans).
+    """
+    fund = fund or {}
+    ocf = fund.get("operatingCashflow")
+    rev = fund.get("totalRevenue")
+    total_debt = fund.get("totalDebt")
+    total_cash = fund.get("totalCash")
+
+    # Gate 1: cash burn -> Sell ceiling.
+    if ocf is not None and ocf < 0:
+        material = not rev or (ocf / rev) < -0.05
+        if material and ticker not in (ocf_veto_exempt or ()):
+            return ("cash_burn", 39)
+
+    # Gate 2: leverage -> Hold ceiling. This is the capex-aware test: netDebt/ocf
+    # separates a self-funded buildout (NBIS 0.076) from real leverage (ORCL
+    # 4.24) without ever reading a capex figure.
+    if ocf is not None and ocf > 0 and total_debt is not None and total_cash is not None:
+        net_debt = total_debt - total_cash
+        if net_debt > 0 and (net_debt / ocf) > 4.0:
+            return ("leverage", 59)
+
+    # Gate 3: margin erosion -> Hold ceiling. grossProfit and operatingIncome are
+    # null for 7 of 53 tickers, so a hole in the series skips the series.
+    rows = financial_history or []
+    for series_key in ("grossProfit", "operatingIncome"):
+        s = [row.get(series_key) for row in rows]
+        r = [row.get("totalRevenue") for row in rows]
+        if len(s) < 3 or any(x is None for x in s) or any(not x for x in r):
+            continue
+        margins = [a / b for a, b in zip(s, r)]
+        if margins[-1] - margins[0] <= -0.05 and margins[-1] < margins[-2]:
+            return ("margin_erosion", 59)
+
+    return (None, None)
+
+
+def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=None,
+                       ocf_veto_exempt=None):
     """Merge fundamentals and price targets into technicals, compute combined score."""
     if not technicals:
         return technicals
@@ -876,6 +957,7 @@ def merge_fundamentals(technicals, fund_data):
 
     # Fundamentals dict
     technicals["fundamentals"] = fund if fund else None
+    technicals["financialHistory"] = financial_history
 
     # Technical score stays pure (already computed in fetch_technicals)
     tech_score = technicals.get("score", 50)
@@ -884,20 +966,33 @@ def merge_fundamentals(technicals, fund_data):
     # Compute fundamental score
     fund_score, fund_reasons = compute_fundamental_score(
         fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts"),
-        sector=fund.get("sector"),
+        sector=fund.get("sector"), financial_history=financial_history,
     )
-    technicals["fund_score"] = fund_score
-    technicals["fund_score_reasons"] = fund_reasons
-    quality, quality_details = compute_quality_score(fund)
+    quality, quality_details = compute_quality_score(fund, financial_history)
     technicals["quality_score"] = quality
     technicals["quality_details"] = quality_details
 
-    # Combined score: tech 40%, fundamental 60%
-    combined = round(tech_score * 0.40 + fund_score * 0.60, 1)
-    technicals["combined_score"] = combined
+    # Veto gates cap both the fundamental score and the combined score. Capping
+    # only fund_score is 40% defanged — at tech >= 55 a Sell-ceilinged name still
+    # clears 39 on the combine.
+    veto_reason, veto_cap = veto_gates(fund, financial_history, ticker, ocf_veto_exempt)
+    technicals["veto_reason"] = veto_reason
 
-    # Recommendation from combined score
-    technicals["recommendation"] = score_to_recommendation(combined)
+    # Combined score: tech 40%, fundamental 60%
+    if fund_score is None:
+        combined, recommendation = None, "No Data"
+    else:
+        combined = round(tech_score * 0.40 + fund_score * 0.60, 1)
+        if veto_cap is not None:
+            combined = min(combined, veto_cap)
+            fund_score = min(fund_score, veto_cap)
+            fund_reasons = fund_reasons + [f"Capped at {veto_cap} ({veto_reason}) (-Fund)"]
+        recommendation = score_to_recommendation(combined)
+
+    technicals["fund_score"] = fund_score
+    technicals["fund_score_reasons"] = fund_reasons
+    technicals["combined_score"] = combined
+    technicals["recommendation"] = recommendation
 
     # Keep pure technical recommendation
     technicals["tech_recommendation"] = score_to_recommendation(tech_score)
@@ -997,10 +1092,12 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
             wl_picks.append((combined, f"{ticker}: combined={combined}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
 
-    buys.sort(key=lambda x: -x[0])
-    sells.sort(key=lambda x: x[0])
-    holds.sort(key=lambda x: -x[0])
-    wl_picks.sort(key=lambda x: -x[0])
+    # combined is None for a ticker that abstained (no fundamentals), so sort it
+    # as 0 rather than letting one failed fetch crash the whole briefing.
+    buys.sort(key=lambda x: -(x[0] or 0))
+    sells.sort(key=lambda x: x[0] or 0)
+    holds.sort(key=lambda x: -(x[0] or 0))
+    wl_picks.sort(key=lambda x: -(x[0] or 0))
 
     algo_text = "\n## ALGORITHM DECISIONS (pre-computed)\n"
     algo_text += "\n### BUY/ADD (top by score):\n"
@@ -1274,6 +1371,7 @@ def main():
     config = load_config()
     portfolio = config["portfolio"]
     watchlist = config["watchlist"]
+    ocf_veto_exempt = config.get("ocf_veto_exempt", [])
     all_tickers = list(portfolio.keys()) + watchlist
 
     # Fetch market data. Market news only feeds the briefing prompt, so a Finnhub
@@ -1296,10 +1394,10 @@ def main():
         technicals[ticker] = fetch_technicals(ticker)
         time.sleep(0.2)
         fund_data = fetch_fundamentals(ticker)
-        technicals[ticker] = merge_fundamentals(technicals[ticker], fund_data)
         fh = fetch_financial_history(ticker)
-        if technicals[ticker] and fh:
-            technicals[ticker]["financialHistory"] = fh
+        technicals[ticker] = merge_fundamentals(
+            technicals[ticker], fund_data, fh, ticker, ocf_veto_exempt
+        )
         time.sleep(0.2)  # Rate limit Yahoo Finance
 
     # Build earnings list from Yahoo Finance calendarEvents (per-ticker)

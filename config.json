@@ -29,6 +29,7 @@
     "DVN": 1.07,
     "EOS": 1.02
   },
+  "ocf_veto_exempt": ["NU", "SOFI"],
   "watchlist": [
     "NICE", "BABA", "V", "GRAB", "OKLO", "AVGO", "INTU",
     "ANET", "IBM", "DELL", "TSM", "ORA", "EOSE", "PLTR", "CEG", "AMD", "MU",
