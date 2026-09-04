@@ -185,115 +185,6 @@ def compute_ema(data, span):
     return ema
 
 
-def compute_stochastic(highs, lows, closes, k_period=14, d_period=3):
-    if len(closes) < k_period:
-        return None, None
-    k_values = []
-    for i in range(k_period - 1, len(closes)):
-        h = max(highs[i - k_period + 1:i + 1])
-        l = min(lows[i - k_period + 1:i + 1])
-        if h == l:
-            k_values.append(50)
-        else:
-            k_values.append(((closes[i] - l) / (h - l)) * 100)
-    if len(k_values) < d_period:
-        return k_values[-1] if k_values else None, None
-    d_value = sum(k_values[-d_period:]) / d_period
-    return round(k_values[-1], 1), round(d_value, 1)
-
-
-def compute_mfi(highs, lows, closes, volumes, period=14):
-    if len(closes) < period + 1:
-        return None
-    pos_flow = 0
-    neg_flow = 0
-    for i in range(len(closes) - period, len(closes)):
-        tp = (highs[i] + lows[i] + closes[i]) / 3
-        prev_tp = (highs[i - 1] + lows[i - 1] + closes[i - 1]) / 3
-        raw_mf = tp * volumes[i]
-        if tp > prev_tp:
-            pos_flow += raw_mf
-        else:
-            neg_flow += raw_mf
-    if neg_flow == 0:
-        return 100.0
-    mfr = pos_flow / neg_flow
-    return round(100 - (100 / (1 + mfr)), 1)
-
-
-def compute_adx(highs, lows, closes, period=14):
-    if len(closes) < period * 2:
-        return None
-    tr_list, plus_dm, minus_dm = [], [], []
-    for i in range(1, len(closes)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
-        up = highs[i] - highs[i - 1]
-        down = lows[i - 1] - lows[i]
-        tr_list.append(tr)
-        plus_dm.append(up if up > down and up > 0 else 0)
-        minus_dm.append(down if down > up and down > 0 else 0)
-    # Smooth with EMA
-    def smooth(data, n):
-        s = sum(data[:n])
-        result = [s]
-        for i in range(n, len(data)):
-            s = s - s / n + data[i]
-            result.append(s)
-        return result
-    str_list = smooth(tr_list, period)
-    spdm = smooth(plus_dm, period)
-    sndm = smooth(minus_dm, period)
-    dx_list = []
-    for i in range(len(str_list)):
-        if str_list[i] == 0:
-            continue
-        pdi = 100 * spdm[i] / str_list[i]
-        ndi = 100 * sndm[i] / str_list[i]
-        if pdi + ndi == 0:
-            continue
-        dx_list.append(100 * abs(pdi - ndi) / (pdi + ndi))
-    if len(dx_list) < period:
-        return None
-    adx = sum(dx_list[-period:]) / period
-    return round(adx, 1)
-
-
-def compute_bollinger_bands(closes, period=20, num_std=2):
-    if len(closes) < period:
-        return None, None, None
-    window = closes[-period:]
-    middle = sum(window) / period
-    variance = sum((c - middle) ** 2 for c in window) / period
-    stddev = variance ** 0.5
-    return round(middle, 4), round(middle + num_std * stddev, 4), round(middle - num_std * stddev, 4)
-
-
-def compute_obv(closes, volumes):
-    if len(closes) < 2 or len(volumes) < 2:
-        return None, None
-    obv = [0]
-    for i in range(1, len(closes)):
-        if closes[i] > closes[i - 1]:
-            obv.append(obv[-1] + volumes[i])
-        elif closes[i] < closes[i - 1]:
-            obv.append(obv[-1] - volumes[i])
-        else:
-            obv.append(obv[-1])
-    return obv[-1], obv
-
-
-def detect_obv_divergence(closes, obv_values, lookback=20):
-    if not obv_values or len(closes) < lookback or len(obv_values) < lookback:
-        return None
-    price_delta = closes[-1] - closes[-lookback]
-    obv_delta = obv_values[-1] - obv_values[-lookback]
-    if price_delta < 0 and obv_delta > 0:
-        return "bullish"
-    if price_delta > 0 and obv_delta < 0:
-        return "bearish"
-    return None
-
-
 def fetch_technicals(ticker):
     """Fetch OHLCV from Yahoo Finance, compute comprehensive technical indicators and composite score."""
     try:
@@ -325,44 +216,23 @@ def fetch_technicals(ticker):
         rsi = compute_rsi(closes)
         sma50 = round(sum(closes[-50:]) / 50, 2) if len(closes) >= 50 else None
         sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
-        ema20 = compute_ema(closes, 20)
-        ema20_val = round(ema20[-1], 2) if ema20 else None
 
-        # MACD (12, 26, 9)
+        # PPO (12, 26) — normalized MACD, replaces macd/macd_signal/macd_hist
         ema12 = compute_ema(closes, 12)
         ema26 = compute_ema(closes, 26)
-        macd_line, macd_signal, macd_hist = None, None, None
-        if ema12 and ema26:
-            offset = len(ema12) - len(ema26)
-            macd_vals = [ema12[i + offset] - ema26[i] for i in range(len(ema26))]
-            macd_line = round(macd_vals[-1], 4) if macd_vals else None
-            sig = compute_ema(macd_vals, 9)
-            if sig:
-                macd_signal = round(sig[-1], 4)
-                macd_hist = round(macd_vals[-1] - sig[-1], 4)
+        ppo = round((ema12[-1] - ema26[-1]) / ema26[-1] * 100, 4) if ema12 and ema26 and ema26[-1] else None
 
-        # Stochastic (14, 3)
-        stoch_k, stoch_d = compute_stochastic(highs, lows, closes)
-
-        # MFI (14)
-        mfi = compute_mfi(highs, lows, closes, volumes)
-
-        # ADX (14)
-        adx = compute_adx(highs, lows, closes)
-
-        # Bollinger Bands (20, 2)
-        bb_middle, bb_upper, bb_lower = compute_bollinger_bands(closes)
-
-        # OBV
-        obv_current, obv_series = compute_obv(closes, volumes)
-        obv_divergence = detect_obv_divergence(closes, obv_series) if obv_series else None
+        # 150-day MA + 21-day slope (150MA position/slope is the "trend" input below)
+        sma150 = round(sum(closes[-150:]) / 150, 2) if len(closes) >= 150 else None
+        ma150_series = [sum(closes[i-149:i+1]) / 150 for i in range(149, len(closes))] if len(closes) >= 171 else []
+        slope150 = (ma150_series[-1] / ma150_series[-21] - 1) * 100 if len(ma150_series) >= 21 else None
 
         # 52-week high/low
         high_52w = round(max(closes[-252:]), 2) if closes else None
         low_52w = round(min(closes[-252:]), 2) if closes else None
 
-        # Volume averages
-        vol_avg_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else None
+        # Volume average, 20 days prior to the day being tested (excludes that day itself)
+        vol_avg_20 = sum(volumes[-21:-1]) / 20 if len(volumes) >= 21 else None
 
         # --- SIGNALS ---
         signals = []
@@ -370,20 +240,16 @@ def fetch_technicals(ticker):
         elif sma50: signals.append("below SMA50")
         if sma200 and current > sma200: signals.append("above SMA200")
         elif sma200: signals.append("below SMA200")
-        if sma50 and sma200:
-            if sma50 > sma200: signals.append("golden cross")
-            else: signals.append("death cross")
         if rsi and rsi > 70: signals.append("overbought")
         elif rsi and rsi < 30: signals.append("oversold")
-        if macd_hist is not None:
-            if macd_hist > 0: signals.append("MACD bullish")
+        if ppo is not None:
+            if ppo > 0: signals.append("MACD bullish")
             else: signals.append("MACD bearish")
-        if adx and adx > 25: signals.append(f"strong trend (ADX {adx})")
-        if bb_upper and bb_lower:
-            if current <= bb_lower: signals.append("BB oversold")
-            elif current >= bb_upper: signals.append("BB overbought")
-        if obv_divergence == "bullish": signals.append("OBV bullish divergence")
-        elif obv_divergence == "bearish": signals.append("OBV bearish divergence")
+        if vol_avg_20 and len(volumes) > 0 and len(opens) > 0:
+            if closes[-1] > opens[-1] and volumes[-1] > vol_avg_20:
+                signals.append("bullish volume confirmation")
+            elif closes[-1] < opens[-1] and volumes[-1] > vol_avg_20:
+                signals.append("bearish volume confirmation")
 
         # --- YTD ---
         ytd_pct = None
@@ -397,87 +263,26 @@ def fetch_technicals(ticker):
                     break
 
         # --- COMPOSITE SCORE (0-100) ---
+        # 150MA position+slope (70%) blended with PPO-normalized MACD magnitude (30%).
+        # See docs/superpowers/specs/2026-09-04-scoring-rewrite-design.md "Final technical score".
         score_reasons = []
 
-        # 1. Moving Average Score (weight 25%) — allows negative raw, then normalize
-        ma_raw = 0
-        if sma50:
-            if current > sma50:
-                ma_raw += 25; score_reasons.append("Price > SMA50 (+MA)")
-            else:
-                ma_raw -= 10; score_reasons.append("Price < SMA50 (-MA)")
-        if sma200:
-            if current > sma200:
-                ma_raw += 25; score_reasons.append("Price > SMA200 (+MA)")
-            else:
-                ma_raw -= 10; score_reasons.append("Price < SMA200 (-MA)")
-        if sma50 and sma200:
-            if sma50 > sma200:
-                ma_raw += 25; score_reasons.append("Golden cross: SMA50 > SMA200 (+MA)")
-            else:
-                ma_raw -= 25; score_reasons.append("Death cross: SMA50 < SMA200 (-MA)")
-        if ema20_val and sma50:
-            if ema20_val > sma50:
-                ma_raw += 25; score_reasons.append("EMA20 > SMA50 (+MA)")
-            else:
-                ma_raw -= 10; score_reasons.append("EMA20 < SMA50 (-MA)")
-        # Normalize: raw range [-55, +100] -> [0, 100]
-        ma_score = max(0, min(100, round((ma_raw + 55) * 100 / 155)))
+        pos52 = (current - low_52w) / (high_52w - low_52w) * 100 if high_52w and low_52w and high_52w != low_52w else None
+        trend = pos52 if pos52 is not None else 50
+        if pos52 is not None:
+            score_reasons.append(f"52w range position {pos52:.0f}% (trend)")
+            if slope150 is not None and slope150 > 1:
+                trend += 8; score_reasons.append(f"150MA rising {slope150:.1f}%/21d (+trend)")
+            elif slope150 is not None and slope150 < -1:
+                trend -= 8; score_reasons.append(f"150MA falling {slope150:.1f}%/21d (-trend)")
+        trend = max(0, min(100, trend))
 
-        # 2. Oscillator Score (0-100, weight 40%)
-        osc_raw = 0  # range roughly -70 to +70, normalized later
-        if rsi:
-            if rsi < 30: osc_raw += 25; score_reasons.append(f"RSI {rsi} — oversold (+Osc)")
-            elif rsi < 40: osc_raw += 12; score_reasons.append(f"RSI {rsi} — low (+Osc)")
-            elif rsi > 70: osc_raw -= 25; score_reasons.append(f"RSI {rsi} — overbought (-Osc)")
-            elif rsi > 60: osc_raw -= 12; score_reasons.append(f"RSI {rsi} — high (-Osc)")
-        if macd_line is not None and macd_signal is not None:
-            if macd_line > macd_signal and macd_line > 0:
-                osc_raw += 25; score_reasons.append("MACD strong bullish (+Osc)")
-            elif macd_line > macd_signal:
-                osc_raw += 12; score_reasons.append("MACD bullish crossover (+Osc)")
-            elif macd_line < macd_signal and macd_line < 0:
-                osc_raw -= 25; score_reasons.append("MACD strong bearish (-Osc)")
-            elif macd_line < macd_signal:
-                osc_raw -= 12; score_reasons.append("MACD bearish crossover (-Osc)")
-        if stoch_k is not None and stoch_d is not None:
-            if stoch_k < 20 and stoch_k > stoch_d:
-                osc_raw += 20; score_reasons.append(f"Stochastic oversold + bullish ({stoch_k:.0f}) (+Osc)")
-            elif stoch_k > 80 and stoch_k < stoch_d:
-                osc_raw -= 20; score_reasons.append(f"Stochastic overbought + bearish ({stoch_k:.0f}) (-Osc)")
-        if bb_upper and bb_lower:
-            if current <= bb_lower: osc_raw += 20; score_reasons.append("BB oversold (+Osc)")
-            elif current >= bb_upper: osc_raw -= 20; score_reasons.append("BB overbought (-Osc)")
-        osc_score = max(0, min(100, (osc_raw + 90) / 1.8))
+        macd_score = 50
+        if ppo is not None:
+            macd_score = 50 + 40 * min(1, abs(ppo) / 3.6) * (1 if ppo > 0 else -1)
+            score_reasons.append(f"PPO {ppo:.2f}% — {'bullish' if ppo > 0 else 'bearish'} (macd)")
 
-        # 3. Volume Score (0-100, weight 20%)
-        vol_raw = 0
-        if mfi is not None:
-            if mfi < 20: vol_raw += 20; score_reasons.append(f"MFI {mfi} — oversold (+Vol)")
-            elif mfi > 80: vol_raw -= 20; score_reasons.append(f"MFI {mfi} — overbought (-Vol)")
-        if vol_avg_20 and len(volumes) > 0 and len(opens) > 0:
-            if closes[-1] > opens[-1] and volumes[-1] > vol_avg_20:
-                vol_raw += 15; score_reasons.append("Bullish volume confirmation (+Vol)")
-            elif closes[-1] < opens[-1] and volumes[-1] > vol_avg_20:
-                vol_raw -= 15; score_reasons.append("Bearish volume confirmation (-Vol)")
-        if obv_divergence == "bullish":
-            vol_raw += 15; score_reasons.append("OBV bullish divergence (+Vol)")
-        elif obv_divergence == "bearish":
-            vol_raw -= 15; score_reasons.append("OBV bearish divergence (-Vol)")
-        vol_score = max(0, min(100, vol_raw + 50))
-
-        # 4. Trend Strength Score (0-100, weight 15%)
-        if adx:
-            if adx > 40: trend_score = 100; score_reasons.append(f"ADX {adx} — very strong trend (+Trend)")
-            elif adx > 25: trend_score = 75; score_reasons.append(f"ADX {adx} — strong trend (+Trend)")
-            elif adx > 20: trend_score = 50
-            else: trend_score = 25; score_reasons.append(f"ADX {adx} — weak/ranging (-Trend)")
-        else:
-            trend_score = 50
-
-        # Composite
-        composite = (ma_score * 0.25) + (osc_score * 0.40) + (vol_score * 0.20) + (trend_score * 0.15)
-        composite = round(composite, 1)
+        composite = round(0.70 * trend + 0.30 * macd_score, 1)
 
         recommendation = score_to_recommendation(composite)
 
@@ -488,12 +293,8 @@ def fetch_technicals(ticker):
 
         return {
             "price": current, "prev_close": prev_close, "change_pct": change_pct, "ytd_pct": ytd_pct,
-            "rsi": rsi, "sma50": sma50, "sma200": sma200,
-            "macd": macd_line, "macd_signal": macd_signal, "macd_hist": macd_hist,
-            "stoch_k": stoch_k, "stoch_d": stoch_d,
-            "mfi": mfi, "adx": adx,
-            "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_middle": bb_middle,
-            "obv": obv_current, "obv_divergence": obv_divergence,
+            "rsi": rsi, "sma50": sma50, "sma200": sma200, "sma150": sma150,
+            "ppo": ppo, "pos52": round(pos52, 1) if pos52 is not None else None,
             "high_52w": high_52w, "low_52w": low_52w,
             "signals": signals,
             "score": composite, "recommendation": recommendation, "score_reasons": score_reasons,
@@ -1189,8 +990,6 @@ Key upcoming economic events with date and descriptive emoji. One line each.
 <b>\U0001f4c8 TECHNICAL SNAPSHOT</b>
 \U0001f525 Overbought (RSI > 70): list tickers with allocation% or [WL] and RSI value.
 \U0001f9ca Oversold (RSI < 30): list tickers with allocation% or [WL] and RSI value.
-\U0001f6a7 Death Crosses Identified: comma-separated list of tickers.
-\U0001f31f Golden Crosses Identified: comma-separated list of tickers.
 Only include categories that have tickers. Skip empty ones.
 
 <b>\U0001f4bc PORTFOLIO PULSE</b>
