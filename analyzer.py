@@ -873,9 +873,12 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
         quality = sum(known)
         quality_details = [label for label, ok in signals if ok]
         health_score = round(quality / len(known) * 100)
-        if quality >= 6:
+        # Threshold on the coverage-adjusted percentage, not the raw pass count:
+        # the denominator varies from 1 to 8, so "1 passed" is a perfect score
+        # when 1 signal was measurable and a terrible one when 8 were.
+        if health_score >= 75:
             reasons.append(f"Strong quality ({quality}/{len(known)}: {', '.join(quality_details[:3])}) (+Fund)")
-        elif quality <= 2:
+        elif health_score <= 25:
             reasons.append(f"Weak quality ({quality}/{len(known)}) (-Fund)")
 
     # The analyst price target is display-only. It is sentiment, and at 20% of
