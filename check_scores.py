@@ -29,38 +29,48 @@ DATA = os.path.join(HERE, "docs", "data", "market-data.json")
 TOL = 0.05  # stored scores are rounded to 1dp
 
 
-def replay(tech):
+def replay(tech, ticker, ocf_veto_exempt):
     """Recompute the fundamental half plus the combine, from stored inputs only.
+
+    Mirrors merge_fundamentals exactly, veto cap included — a fixture that skips
+    the gates cannot tell you whether the gates still work.
 
     tech_score is an *input* here, not an output: recomputing it needs 200+ OHLCV
     bars and only 63 are stored per ticker. Phase 3 re-baselines it from a live run.
     """
     fund = tech.get("fundamentals") or {}
-    quality, _ = analyzer.compute_quality_score(fund)
+    history = tech.get("financialHistory")
+    quality, _ = analyzer.compute_quality_score(fund, history)
     fund_score, _ = analyzer.compute_fundamental_score(
         fund,
         tech.get("price"),
         tech.get("target_mean"),
         tech.get("num_analysts"),
         sector=fund.get("sector"),
+        financial_history=history,
     )
     tech_score = tech.get("tech_score")
     if fund_score is None or tech_score is None:
         return quality, fund_score, None, "No Data"
     combined = round(tech_score * 0.40 + fund_score * 0.60, 1)
+    _, cap = analyzer.veto_gates(fund, history, ticker, ocf_veto_exempt)
+    if cap is not None:
+        combined = min(combined, cap)
+        fund_score = min(fund_score, cap)
     return quality, fund_score, combined, analyzer.score_to_recommendation(combined)
 
 
 def check(report=True):
     """Returns (rows_changed, recommendation_flips, abstained)."""
     tickers = json.load(open(DATA))["tickers"]
+    ocf_veto_exempt = analyzer.load_config().get("ocf_veto_exempt", [])
     changed, flips, abstained = [], [], []
 
     for tkr in sorted(tickers):
         tech = (tickers[tkr] or {}).get("technicals") or {}
         if not tech:
             continue
-        quality, fund, combined, rec = replay(tech)
+        quality, fund, combined, rec = replay(tech, tkr, ocf_veto_exempt)
         was_f, was_c = tech.get("fund_score"), tech.get("combined_score")
         was_q, was_rec = tech.get("quality_score"), tech.get("recommendation")
 
