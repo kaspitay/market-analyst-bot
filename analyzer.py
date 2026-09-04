@@ -651,6 +651,8 @@ def fetch_financial_history(ticker):
         types = ",".join([
             "annualTotalRevenue", "annualGrossProfit", "annualOperatingIncome",
             "annualNetIncome", "annualDilutedEPS", "annualStockholdersEquity",
+            "annualCapitalExpenditure", "annualOperatingCashFlow", "annualFreeCashFlow",
+            "annualTotalAssets", "annualTotalDebt", "annualDilutedAverageShares",
         ])
         now = int(time.time())
         period1 = now - (5 * 365 * 86400)
@@ -682,6 +684,14 @@ def fetch_financial_history(ticker):
         history = []
         for dt in all_dates:
             year = dt[:4]
+            # Yahoo reports capex as negative (cash outflow); the F-score and
+            # capex/revenue ratios want its magnitude.
+            capex = by_type.get("capitalExpenditure", {}).get(dt)
+            capex = abs(capex) if capex is not None else None
+            fcf = by_type.get("freeCashFlow", {}).get(dt)
+            ocf = by_type.get("operatingCashFlow", {}).get(dt)
+            if ocf is None and fcf is not None and capex is not None:
+                ocf = fcf + capex  # ASML-style gap: OCF absent, FCF and capex present
             history.append({
                 "year": year,
                 "totalRevenue": by_type.get("totalRevenue", {}).get(dt),
@@ -690,6 +700,12 @@ def fetch_financial_history(ticker):
                 "netIncome": by_type.get("netIncome", {}).get(dt),
                 "eps": by_type.get("dilutedEPS", {}).get(dt),
                 "stockholderEquity": by_type.get("stockholdersEquity", {}).get(dt),
+                "capitalExpenditure": capex,
+                "operatingCashFlow": ocf,
+                "freeCashFlow": fcf,
+                "totalAssets": by_type.get("totalAssets", {}).get(dt),
+                "totalDebt": by_type.get("totalDebt", {}).get(dt),
+                "dilutedAverageShares": by_type.get("dilutedAverageShares", {}).get(dt),
             })
         return history if history else None
     except Exception as e:
