@@ -1043,12 +1043,19 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
             cal_text += f"- {e['date']}: {e['title']} - {e.get('description', '')}\n"
 
     # --- PRE-COMPUTE ALGORITHM DECISIONS ---
-    buys, holds, sells = [], [], []
+    buys, holds, sells, no_data = [], [], [], []
     for ticker, tech in technicals.items():
         if not tech or ticker not in portfolio:
             continue
-        alloc = weights.get(ticker, 0)
         rec = tech.get("recommendation", "Hold")
+        if rec == "No Data":
+            # Abstained on fundamentals (Task 2): combined_score/fund_score are
+            # None with the KEY PRESENT, so tech.get(key, default) silently passes
+            # the None through instead of falling back. Never bucket this as a
+            # normal Hold, and never let a literal "combined=None" reach the prompt.
+            no_data.append(ticker)
+            continue
+        alloc = weights.get(ticker, 0)
         combined = tech.get("combined_score", tech.get("score", 50))
         tech_sc = tech.get("tech_score", tech.get("score", 50))
         fund_sc = tech.get("fund_score", 50)
@@ -1078,8 +1085,10 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     for ticker, tech in technicals.items():
         if not tech or ticker in portfolio:
             continue
-        combined = tech.get("combined_score", tech.get("score", 50))
         rec = tech.get("recommendation", "Hold")
+        if rec == "No Data":
+            continue  # same None-masking risk as the portfolio loop above
+        combined = tech.get("combined_score", tech.get("score", 50))
         rsi = tech.get("rsi")
         pt_mean = tech.get("target_mean")
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
@@ -1102,6 +1111,8 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     theme_str = ", ".join(f"{n} {v:.1f}%" for n, v in sorted(expo.items(), key=lambda x: -x[1]))
     standing = "\n## Standing facts (context only — do not report these as news)\n"
     standing += f"- {len(portfolio)} positions. Theme exposure: {theme_str}\n"
+    if no_data:
+        standing += f"- {len(no_data)} ticker(s) have no fundamentals data (abstained): {', '.join(sorted(no_data))}\n"
     if earnings:
         standing += "- Next earnings: " + ", ".join(f"{e['symbol']} {e['date']}" for e in earnings[:3]) + "\n"
     else:
