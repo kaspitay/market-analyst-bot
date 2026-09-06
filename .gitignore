@@ -7,3 +7,4 @@ __pycache__/
 docs/config.js
 specs/
 !docs/superpowers/specs/
+.superpowers/sdd/
