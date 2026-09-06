@@ -40,8 +40,7 @@ def replay(tech, ticker, ocf_veto_exempt):
     """
     fund = tech.get("fundamentals") or {}
     history = tech.get("financialHistory")
-    quality, _ = analyzer.compute_quality_score(fund, history)
-    fund_score, _ = analyzer.compute_fundamental_score(
+    fund_score, _, quality, _ = analyzer.compute_fundamental_score(
         fund,
         tech.get("price"),
         tech.get("target_mean"),

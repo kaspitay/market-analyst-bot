@@ -243,8 +243,7 @@ def fetch_technicals(ticker):
         ema26 = compute_ema(closes, 26)
         ppo = round((ema12[-1] - ema26[-1]) / ema26[-1] * 100, 4) if ema12 and ema26 and ema26[-1] else None
 
-        # 150-day MA + 21-day slope (150MA position/slope is the "trend" input below)
-        sma150 = round(sum(closes[-150:]) / 150, 2) if len(closes) >= 150 else None
+        # 150-day MA slope (150MA position/slope is the "trend" input below)
         ma150_series = [sum(closes[i-149:i+1]) / 150 for i in range(149, len(closes))] if len(closes) >= 171 else []
         slope150 = (ma150_series[-1] / ma150_series[-21] - 1) * 100 if len(ma150_series) >= 21 else None
 
@@ -323,7 +322,7 @@ def fetch_technicals(ticker):
 
         return {
             "price": current, "prev_close": prev_close, "change_pct": change_pct, "ytd_pct": ytd_pct,
-            "rsi": rsi, "sma50": sma50, "sma200": sma200, "sma150": sma150,
+            "rsi": rsi, "sma50": sma50, "sma200": sma200,
             "ppo": ppo, "pos52": round(pos52, 1) if pos52 is not None else None,
             "high_52w": high_52w, "low_52w": low_52w,
             "rvol5": rvol5, "dir5": dir5,
@@ -601,33 +600,19 @@ def _f_score_signals(financial_history):
     ]
 
 
-def compute_quality_score(fund, financial_history=None):
-    """Piotroski-style F-score (0-8) from annual financial history.
-
-    Returns (passed, details) — the count of signals that passed and the labels
-    of those signals — or (None, []) when no signal was computable at all. With
-    no history nothing is computable: every signal reads the per-year records,
-    and deliberately does not fall back to `fund`'s own point-in-time fields,
-    which would fake coverage from data that cannot supply a year-over-year
-    delta. `fund` is kept in the signature for callers that pass it positionally.
-    """
-    known = [(label, ok) for label, ok in _f_score_signals(financial_history) if ok is not None]
-    if not known:
-        return None, []
-    return sum(ok for _, ok in known), [label for label, ok in known if ok]
-
-
 def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=None,
                               financial_history=None):
     """Compute 0-100 fundamental score from valuation, profitability, growth and health.
 
-    Returns (score, reasons), or (None, []) when there are no fundamentals at
-    all — a ticker with no data must abstain, not read as a neutral "Hold".
-    The analyst price target is reported in `reasons` but is deliberately not
-    part of the score: it is sentiment, not a fundamental.
+    Returns (score, reasons, quality, quality_details) — quality is the raw
+    Piotroski F-score pass count (quality_details its labels), or (None, [])
+    when no signal was computable at all. Returns (None, [], None, []) when
+    there are no fundamentals at all — a ticker with no data must abstain, not
+    read as a neutral "Hold". The analyst price target is reported in `reasons`
+    but is deliberately not part of the score: it is sentiment, not a fundamental.
     """
     if not fund:
-        return None, []
+        return None, [], None, []
     reasons = []
 
     # 1. Valuation (0.20) — sector-relative P/E and P/S
@@ -700,7 +685,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     # away below rather than scored as a neutral 50.
     signals = _f_score_signals(financial_history)
     known = [ok for _, ok in signals if ok is not None]
-    health_score = None
+    health_score, quality, quality_details = None, None, []
     if known:
         quality = sum(known)
         quality_details = [label for label, ok in signals if ok]
@@ -722,7 +707,7 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     legs = [(0.20, val_score), (0.25, prof_score), (0.20, grow_score), (0.35, health_score)]
     coverage = sum(w for w, v in legs if v is not None)
     fund_total = sum(w * v for w, v in legs if v is not None) / coverage
-    return round(fund_total, 1), reasons
+    return round(fund_total, 1), reasons, quality, quality_details
 
 
 def veto_gates(fund, financial_history, ticker, ocf_veto_exempt):
@@ -797,11 +782,10 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
     technicals["tech_score"] = tech_score
 
     # Compute fundamental score
-    fund_score, fund_reasons = compute_fundamental_score(
+    fund_score, fund_reasons, quality, quality_details = compute_fundamental_score(
         fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts"),
         sector=fund.get("sector"), financial_history=financial_history,
     )
-    quality, quality_details = compute_quality_score(fund, financial_history)
     technicals["quality_score"] = quality
     technicals["quality_details"] = quality_details
 
