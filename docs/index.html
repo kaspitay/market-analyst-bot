@@ -203,10 +203,10 @@
         <dd>Consensus price target from Wall Street analysts. Shows mean target and upside/downside from current price. <b>Green</b> = upside potential. <b>Red</b> = downside risk.</dd>
 
         <dt>Technical Score (0-100)</dt>
-        <dd>Pure technical analysis: Moving Averages (25%), Oscillators incl. RSI/MACD/Stochastic/BB (40%), Volume incl. MFI/OBV (20%), Trend Strength/ADX (15%).</dd>
+        <dd>150-day MA position + slope (70%) blended with PPO-normalized MACD magnitude (30%). RSI, SMA50/SMA200, and 52-week high/low are still computed and shown above, but they are <b>display-only</b> — not part of this score.</dd>
 
         <dt>Fundamental Score (0-100)</dt>
-        <dd>Sector-relative valuation (P/E &amp; P/S vs sector median, 25%), Profitability/margins/ROE (20%), Growth/revenue+earnings (20%), Quality Score (Piotroski-inspired 0-7, 15%), Analyst Price Targets (20%).</dd>
+        <dd>Sector-relative valuation (P/E &amp; P/S vs sector median, 20%), Profitability/margins/ROE (25%), Growth/revenue+earnings (20%), Financial Health (Piotroski-style 0-8 F-score, 35% — renormalized across the other legs when health can't be measured). The analyst price target is <b>display-only</b>, not part of this score. Hard veto gates can cap the score regardless of the weights above: 39 for cash burn, 59 for leverage or margin erosion.</dd>
 
         <dt>Combined Score &amp; Recommendation</dt>
         <dd>Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b>. Ranges: <b>Strong Buy</b> (72+), <b>Buy</b> (60-71), <b>Hold</b> (40-59), <b>Sell</b> (28-39), <b>Strong Sell</b> (&lt;28). Not financial advice.</dd>
