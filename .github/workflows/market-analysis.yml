@@ -2,8 +2,11 @@ name: Market Analysis
 
 on:
   schedule:
-    - cron: "30 11 * * *"    # 7:30 AM ET (UTC-4) — daily to keep repo active
-    - cron: "0 18 * * 1-5"  # 2:00 PM ET (UTC-4) — weekdays only
+    # 7:30 AM ET (UTC-4) — daily, and the only scheduled run. The 18:00 UTC
+    # pre-close run scored every ticker against a still-forming daily candle,
+    # which moved combined_score more at the median (0.60) than a whole
+    # overnight session did (0.20) — monitor mode would report that as news.
+    - cron: "30 11 * * *"
   workflow_dispatch:
     inputs:
       briefing_type:

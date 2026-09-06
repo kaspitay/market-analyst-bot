@@ -53,6 +53,27 @@ def _sector_relative_score(value, sector_median):
 # --- Score thresholds for recommendations ---
 THRESHOLDS = {"strong_buy": 72, "buy": 60, "hold": 40, "sell": 28}
 
+DATA_PATH = os.path.join(os.path.dirname(__file__), "docs", "data", "market-data.json")
+
+# --- Monitor mode: debounce constants (see the spec's "Monitor mode" table) ---
+MIN_WEIGHT = 2.0        # per-ticker triggers are portfolio-only, >= 2% of the book
+REC_HYSTERESIS = 3.0    # 1: a bucket flip under 3 combined points is noise (526 raw -> 84)
+HI_LO_SUPPRESS = 21     # 3: days before the same ticker may report a new 52w extreme again
+DISTRIB_RVOL = 1.5      # 6: 5-day volume vs the prior 20-day average
+DISTRIB_DIR = -2.0      # 6: net signed volume, in average-days, over those 5 sessions
+THEME_EMA_ALPHA = 0.1   # 8
+THEME_DROP = 3.0        # 8: points below the theme's own EMA
+THEME_COVERAGE = 0.7    # 8: fraction of a theme's members that must be scored
+EXPO_LIMIT = 25.0       # 9: theme exposure warning level
+EXPO_HYSTERESIS = 2.0   # 9
+
+
+def _bucket_edges(score):
+    """[low, high) score range of the recommendation bucket `score` falls in."""
+    edges = sorted(THRESHOLDS.values())
+    return (max((e for e in edges if e <= score), default=float("-inf")),
+            min((e for e in edges if e > score), default=float("inf")))
+
 
 def score_to_recommendation(score):
     if score >= THRESHOLDS["strong_buy"]: return "Strong Buy"
@@ -234,6 +255,15 @@ def fetch_technicals(ticker):
         # Volume average, 20 days prior to the day being tested (excludes that day itself)
         vol_avg_20 = sum(volumes[-21:-1]) / 20 if len(volumes) >= 21 else None
 
+        # Distribution detector — narrative only, never scored (the spec rejects
+        # volume_surge as a scored component). rvol5: last 5 sessions' volume against
+        # the 20 before them. dir5: net signed volume over those 5 sessions (up days
+        # positive, down days negative), expressed in average-days.
+        vol_base = sum(volumes[-25:-5]) / 20 if len(volumes) >= 25 else None
+        rvol5 = round(sum(volumes[-5:]) / 5 / vol_base, 2) if vol_base else None
+        dir5 = round(sum(v if c > p else -v for c, p, v in
+                         zip(closes[-5:], closes[-6:-1], volumes[-5:])) / vol_base, 2) if vol_base else None
+
         # --- SIGNALS ---
         signals = []
         if sma50 and current > sma50: signals.append("above SMA50")
@@ -296,6 +326,7 @@ def fetch_technicals(ticker):
             "rsi": rsi, "sma50": sma50, "sma200": sma200, "sma150": sma150,
             "ppo": ppo, "pos52": round(pos52, 1) if pos52 is not None else None,
             "high_52w": high_52w, "low_52w": low_52w,
+            "rvol5": rvol5, "dir5": dir5,
             "signals": signals,
             "score": composite, "recommendation": recommendation, "score_reasons": score_reasons,
             "chart": chart_data,
@@ -814,7 +845,178 @@ def compute_weights(portfolio, technicals):
     return {t: round(v / total * 100, 2) for t, v in vals.items()} if total else {}
 
 
-def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo):
+def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
+    """Monitor mode: what CHANGED since the last run. Returns (alerts, monitor).
+
+    **Invariant: every trigger is an edge against prior state, never a level.**
+    A current-state predicate ("below SMA200", "earnings within 7 days") re-fires
+    every run until it clears — that is the death-cross bug, and it is what made
+    the old briefing 6,533 chars of restated snapshot. If you add a trigger here
+    it compares `old` to `cur`, or it keys a fired-set on event identity.
+
+    `alerts` is [{ticker, trigger, detail}]. `monitor` is the state that has no
+    home in the per-ticker records: the 52w suppression clock, the earnings
+    fired-set, the per-theme score EMA and the per-theme exposure side. It is
+    stored at the top level of market-data.json next to `alerts_pending`.
+    """
+    prev = prev_data.get("tickers") or {}
+    was = prev_data.get("monitor") or {}
+    # Copied, not aliased: this returns the next state, it does not edit the last one.
+    hi_lo_fired = dict(was.get("hi_lo_fired") or {})
+    earnings_fired = dict(was.get("earnings_fired") or {})
+    theme_ema = dict(was.get("theme_ema") or {})
+    theme_expo_hi = dict(was.get("theme_expo_hi") or {})
+
+    alerts = []
+
+    def fire(name, trigger, detail):
+        alerts.append({"ticker": name, "trigger": trigger, "detail": detail})
+
+    for ticker, cur in technicals.items():
+        cur = cur or {}
+        old = (prev.get(ticker) or {}).get("technicals") or {}
+        # A ticker the previous run never scored has no prior state to diff
+        # against: baseline it silently. Without this the watchlist edits alone
+        # (35 -> 42 -> 46 -> 53 across the measured window) emit 18 false alerts.
+        if not old:
+            continue
+
+        c0, c1 = old.get("combined_score"), cur.get("combined_score")
+
+        # 7. DATA_GAP — scored last run, not this run. No weight gate, and it is
+        #    the one trigger that also covers the watchlist.
+        if c0 is not None and c1 is None:
+            fire(ticker, "DATA_GAP", f"scored {c0} last run, no score this run")
+
+        if weights.get(ticker, 0) < MIN_WEIGHT:
+            continue
+
+        # 1. Recommendation bucket flip. The band is on the boundary, not on the
+        #    move: the score has to leave last run's bucket by 3 points, so a name
+        #    sitting on 60 does not flip Buy/Hold on every 0.4-point wobble. Raw
+        #    flips run 570 over the stored history; this filter leaves 73.
+        #    ponytail: stateless, so a drift that crosses a boundary in sub-3-point
+        #    steps is never reported (measured: 2 such moves in 181 runs). Upgrade
+        #    is to hold the last *reported* bucket in `monitor` and band against
+        #    that instead — 34 fires vs 32, if those 2 turn out to matter.
+        if c0 is not None and c1 is not None:
+            lo, hi = _bucket_edges(c0)
+            if c1 >= hi + REC_HYSTERESIS or c1 < lo - REC_HYSTERESIS:
+                fire(ticker, "REC_FLIP", f"{score_to_recommendation(c0)} -> "
+                                         f"{score_to_recommendation(c1)} (combined {c0} -> {c1})")
+
+        # 2. SMA50/SMA200 sign flip.
+        s50_0, s200_0 = old.get("sma50"), old.get("sma200")
+        s50_1, s200_1 = cur.get("sma50"), cur.get("sma200")
+        if None not in (s50_0, s200_0, s50_1, s200_1) and (s50_0 > s200_0) != (s50_1 > s200_1):
+            fire(ticker, "MA_CROSS",
+                 f"{'golden' if s50_1 > s200_1 else 'death'} cross (SMA50 {s50_1}, SMA200 {s200_1})")
+
+        # 3. New 52-week extreme, against the *prior* run's range, then suppressed
+        #    for 21 days so a trending name does not report the same run daily.
+        price, hi0, lo0 = cur.get("price"), old.get("high_52w"), old.get("low_52w")
+        side = None
+        if price and hi0 and lo0:
+            side = "HIGH" if price > hi0 else "LOW" if price < lo0 else None
+        if side:
+            last = hi_lo_fired.get(ticker)
+            days = None if not last else (today - date.fromisoformat(last)).days
+            if days is None or days >= HI_LO_SUPPRESS:
+                fire(ticker, f"52W_{side}", f"${price:.2f} through prior 52w {side.lower()} ${hi0 if side == 'HIGH' else lo0}")
+                hi_lo_fired[ticker] = today.isoformat()
+
+        # 4. A veto gate newly fires or newly clears. Both runs must have been
+        #    scored — "no gate" and "gate not evaluated" are not the same state.
+        v0, v1 = old.get("veto_reason"), cur.get("veto_reason")
+        if c0 is not None and c1 is not None and v0 != v1:
+            fire(ticker, "VETO", f"{v0 or 'none'} -> {v1 or 'none'}")
+
+        # 5. Earnings entering the 0-3 day window, keyed on (ticker, date) so a
+        #    confirmed date fires once and a rescheduled one fires again.
+        ne = (cur.get("next_earnings") or {}).get("date")
+        edate = None
+        if ne:
+            try:
+                edate = date.fromisoformat(ne)
+            except (ValueError, TypeError):
+                edate = None
+        if edate and 0 <= (edate - today).days <= 3 and earnings_fired.get(ticker) != ne:
+            fire(ticker, "EARNINGS", f"reports {ne} ({(edate - today).days}d)")
+            earnings_fired[ticker] = ne
+
+        # 6. Distribution newly true.
+        r0, d0 = old.get("rvol5"), old.get("dir5")
+        r1, d1 = cur.get("rvol5"), cur.get("dir5")
+        if None not in (r0, d0, r1, d1):
+            was_distrib = r0 >= DISTRIB_RVOL and d0 <= DISTRIB_DIR
+            now_distrib = r1 >= DISTRIB_RVOL and d1 <= DISTRIB_DIR
+            if now_distrib and not was_distrib:
+                fire(ticker, "DISTRIBUTION", f"volume {r1:.1f}x, {abs(d1):.1f} average-days net selling")
+
+    # 8. A theme's mean score drops 3 points below its own EMA. Theme-level, so
+    #    the per-ticker weight gate does not apply; coverage is the gate instead,
+    #    since a half-fetched theme's mean is not comparable to the EMA's.
+    for name, members in themes.items():
+        scored = [(technicals.get(t) or {}).get("combined_score") for t in members]
+        scored = [s for s in scored if s is not None]
+        if not members or len(scored) < THEME_COVERAGE * len(members):
+            continue
+        score = sum(scored) / len(scored)
+        base = theme_ema.get(name)
+        if base is not None and score <= base - THEME_DROP:
+            fire(name, "THEME_DROP", f"mean score {score:.1f} vs EMA {base:.1f} ({len(scored)}/{len(members)} scored)")
+            # Re-baseline on the way out. At alpha=0.1 a 13-point drop otherwise
+            # keeps firing for ~24 runs while the EMA crawls back to within 3 —
+            # a level, not an edge. Snapping reports each further 3-point leg
+            # down exactly once and never re-reports the one just sent.
+            base = score
+        theme_ema[name] = round(score if base is None
+                                else THEME_EMA_ALPHA * score + (1 - THEME_EMA_ALPHA) * base, 2)
+
+    # 9. Theme exposure crossing 25%, edge with a 2-point band on the way back
+    #    down. Only meaningful now that weights are live (Task 4) — static
+    #    percentages took 2 distinct values across 162 runs.
+    for name in themes:
+        pct = expo.get(name, 0)
+        was_hi = theme_expo_hi.get(name)
+        if was_hi is None:                       # first sight: baseline silently
+            theme_expo_hi[name] = pct >= EXPO_LIMIT
+        elif not was_hi and pct >= EXPO_LIMIT:
+            fire(name, "THEME_EXPO", f"exposure {pct:.1f}%, over {EXPO_LIMIT:.0f}%")
+            theme_expo_hi[name] = True
+        elif was_hi and pct <= EXPO_LIMIT - EXPO_HYSTERESIS:
+            fire(name, "THEME_EXPO", f"exposure {pct:.1f}%, back under {EXPO_LIMIT:.0f}%")
+            theme_expo_hi[name] = False
+
+    # Anything the previous run computed but could not deliver is still news.
+    seen = {(a["ticker"], a["trigger"]) for a in alerts}
+    for a in prev_data.get("alerts_pending") or []:
+        if (a.get("ticker"), a.get("trigger")) not in seen:
+            alerts.append(a)
+
+    return alerts, {"hi_lo_fired": hi_lo_fired, "earnings_fired": earnings_fired,
+                    "theme_ema": theme_ema, "theme_expo_hi": theme_expo_hi}
+
+
+def quiet_line(portfolio, expo, earnings):
+    """The whole briefing on a day when nothing changed."""
+    themes = [(n, v) for n, v in expo.items() if n != "untagged"]
+    top = max(themes, key=lambda x: x[1]) if themes else None
+    theme_str = f" {top[0]} {top[1]:.1f}%." if top else ""
+    if earnings:
+        e = earnings[0]
+        try:
+            d = date.fromisoformat(e["date"])
+            when = f"{d.month}/{d.day}"
+        except (ValueError, TypeError):
+            when = e["date"]
+        earn_str = f" Next earnings: {e['symbol']} {when}."
+    else:
+        earn_str = " No earnings in the next 14 days."
+    return f"Nothing changed. {len(portfolio)} positions,{theme_str}{earn_str}"
+
+
+def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo, alerts=(), full=False):
     today_str = date.today().strftime("%B %d, %Y")
 
     if briefing_type == "pre-market":
@@ -912,6 +1114,56 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     holds.sort(key=lambda x: -(x[0] or 0))
     wl_picks.sort(key=lambda x: -(x[0] or 0))
 
+    # --- STANDING FACTS (both modes) ---
+    theme_str = ", ".join(f"{n} {v:.1f}%" for n, v in sorted(expo.items(), key=lambda x: -x[1]))
+    standing = "\n## Standing facts (context only — do not report these as news)\n"
+    standing += f"- {len(portfolio)} positions. Theme exposure: {theme_str}\n"
+    if earnings:
+        standing += "- Next earnings: " + ", ".join(f"{e['symbol']} {e['date']}" for e in earnings[:3]) + "\n"
+    else:
+        standing += "- Next earnings: none in the next 14 days\n"
+    for _, entry in wl_picks[:3]:
+        standing += f"- Watchlist entry signal: {entry}\n"
+
+    # --- MONITOR MODE: exceptions only ---
+    if not full:
+        exc_text = "\n## EXCEPTIONS — the only thing to report\n"
+        for a in alerts:
+            exc_text += f"- {a['ticker']} [{a['trigger']}]: {a['detail']}\n"
+
+        exc_news = ""
+        for ticker in dict.fromkeys(a["ticker"] for a in alerts):   # alert order, deduped
+            articles = portfolio_news.get(ticker) or watchlist_news.get(ticker) or []
+            if articles:
+                exc_news += f"\n### {ticker} news\n"
+                for a in articles[:2]:
+                    exc_news += f"- {a['headline']}: {a['summary']}\n"
+        if exc_news:
+            exc_news = "\n## News for the tickers above\n" + exc_news
+
+        return f"""You are a market monitor for a long-term investor. Report ONLY what changed.
+
+FORMAT RULES (strict):
+- Under 1200 characters total. Shorter is better.
+- ONLY use <b> and <i> HTML tags. No other tags.
+- One • bullet per exception, one line each, in the order given below.
+
+Write exactly this:
+
+<b>\U0001f4e1 MONITOR — {today_str}</b>
+
+One bullet per exception: what changed, then one short clause of why, but only if
+the news or market context below actually explains it. Say nothing about any ticker
+that is not in the exception list. Do not restate the portfolio, do not list
+indicators, do not add sections, do not give advice on unchanged positions.
+
+Then one final line beginning "Standing:" with the position count, the largest theme
+exposure, and the next earnings date.
+
+DATA:
+{exc_text}{standing}
+{market_text}{exc_news}"""
+
     algo_text = "\n## ALGORITHM DECISIONS (pre-computed)\n"
     algo_text += "\n### BUY/ADD (top by score):\n"
     for _, entry in buys[:3]:
@@ -975,7 +1227,7 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     return f"""You are a stock market analyst advising a long-term investor.
 Produce a Telegram message briefing {time_context} using ALL the data below.
 
-YOUR ROLE: Our scoring algorithm (0-100, Tech 40% + Fundamental 60%) has pre-computed decisions: Strong Buy (72+), Buy (60-71), Hold (40-59), Sell (28-39), Strong Sell (<28). Fundamentals include sector-relative valuation and a 0-7 quality score. Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
+YOUR ROLE: Our scoring algorithm (0-100, Tech 40% + Fundamental 60%) has pre-computed decisions: Strong Buy (72+), Buy (60-71), Hold (40-59), Sell (28-39), Strong Sell (<28). Fundamentals include sector-relative valuation and a 0-8 Piotroski F-score, and hard veto gates that cap a score at 39 (cash burn) or 59 (leverage, margin erosion). Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
 
 FORMAT RULES (strict):
 - Keep under 3900 characters total.
@@ -998,11 +1250,6 @@ List upcoming earnings from data. Use \u26a0\ufe0f for this week, \U0001f4c6 for
 <b>\U0001f4b0 ECONOMIC CALENDAR</b>
 Key upcoming economic events with date and descriptive emoji. One line each.
 
-<b>\U0001f4c8 TECHNICAL SNAPSHOT</b>
-\U0001f525 Overbought (RSI > 70): list tickers with allocation% or [WL] and RSI value.
-\U0001f9ca Oversold (RSI < 30): list tickers with allocation% or [WL] and RSI value.
-Only include categories that have tickers. Skip empty ones.
-
 <b>\U0001f4bc PORTFOLIO PULSE</b>
 For each portfolio ticker with meaningful news (sorted by allocation):
 Colored dot (\U0001f7e2 positive / \U0001f534 negative / \u26aa neutral price action), then <b>TICKER (alloc%)</b>: one-line news summary. End with impact (\U0001f7e2 Bullish / \U0001f534 Bearish / \u26aa Neutral Impact).
@@ -1016,11 +1263,11 @@ Based on ALL data (algorithm scores + news + technicals + sentiment), give your 
 \U0001f7e1 <b>HOLD</b>: Which to hold and WHY. Group similar tickers together.
 \U0001f534 <b>SELL/REDUCE</b>: Which to sell/trim and WHY. Add \u274c marker.
 Include watchlist tickers in BUY if there's a good entry signal.
-\u26a0\ufe0f Add inline warnings for concentration risk (>10%) or death crosses.
+\u26a0\ufe0f Add an inline warning for concentration risk (any position >10%).
 Skip empty categories.
 
 <b>\u26a0\ufe0f RISK ALERTS</b>
-Flag concentration risks (positions >10%), correlated positions, death crosses needing attention.
+Flag single-position concentration (>10%) and any theme exposure at or above 25%.
 
 <b>\U0001f30d MARKET OUTLOOK</b>
 2-3 sentences on overall sentiment and what to watch {time_context}.
@@ -1113,10 +1360,9 @@ def send_telegram(text, bot_token, chat_id):
             print(f"Warning: HTML parse failed, sending as plain text")
 
 
-def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings, weights):
+def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings, weights, alerts=(), monitor=None):
     """Save all market data as JSON for the dashboard."""
-    data_dir = os.path.join(os.path.dirname(__file__), "docs", "data")
-    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
     # Build per-ticker data
     tickers_data = {}
@@ -1150,12 +1396,29 @@ def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist
         "indicators": indicators,
         "earnings": earnings,
         "tickers": tickers_data,
+        # Undelivered alerts and the monitor's own state. This save happens before
+        # the Telegram leg, so alerts_pending is written full and only emptied once
+        # the send has actually succeeded — see clear_alerts_pending.
+        "alerts_pending": list(alerts),
+        "monitor": monitor or {},
     }
 
-    filepath = os.path.join(data_dir, "market-data.json")
-    with open(filepath, "w") as f:
+    with open(DATA_PATH, "w") as f:
         json.dump(market_data, f, separators=(",", ":"))
-    print(f"Market data saved ({filepath})")
+    print(f"Market data saved ({DATA_PATH}, {len(market_data['alerts_pending'])} alert(s) pending)")
+
+
+def clear_alerts_pending():
+    """Mark this run's alerts delivered. Called only after send_telegram returns —
+    if the send raises, the key survives and the next run re-reports them."""
+    try:
+        with open(DATA_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    data["alerts_pending"] = []
+    with open(DATA_PATH, "w") as f:
+        json.dump(data, f, separators=(",", ":"))
 
 
 def save_briefing_history(briefing_type, content):
@@ -1175,6 +1438,17 @@ def save_briefing_history(briefing_type, content):
 
 def main():
     briefing_type = sys.argv[1] if len(sys.argv) > 1 else "pre-market"
+
+    # Prior run's output. save_market_data is the only writer, so the on-disk file
+    # is exactly the last run's state — read it before anything can overwrite it.
+    # An empty dict (first run, corrupt file) baselines every ticker and fires
+    # nothing, which needs no special-casing anywhere below.
+    prev_data = {}
+    try:
+        with open(DATA_PATH) as f:
+            prev_data = json.load(f)
+    except (OSError, ValueError):
+        pass
 
     finnhub_key = os.environ["FINNHUB_API_KEY"]
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -1266,21 +1540,39 @@ def main():
         indicators["fear_greed"] = fg_data["fear_greed"]
         indicators["indices"] = fg_data["indices"]
         indicators["calendar"] = fg_data["calendar"]
+    # What changed since the last run — computed against prev_data, which was read
+    # before this run touched anything, and *before* the save below advances it.
+    alerts, monitor = compute_exceptions(prev_data, technicals, weights, themes, expo, today)
+    for a in alerts:
+        print(f"EXCEPTION {a['ticker']} [{a['trigger']}]: {a['detail']}")
+    print(f"Exceptions this run: {len(alerts)}")
+
     # Save dashboard data before the AI/Telegram legs: all market data is already
     # fetched here, and the dashboard must not go stale just because Gemini or
-    # Telegram is down.
-    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings, weights)
+    # Telegram is down. alerts_pending goes in full and is cleared only after a
+    # successful send, so a failed send re-reports rather than losing the alert.
+    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news,
+                     indicators, earnings, weights, alerts, monitor)
 
-    prompt = build_prompt(
-        portfolio_news, watchlist_news, market_news,
-        indicators, earnings, portfolio, watchlist, technicals, briefing_type,
-        weights, TAG, expo,
-    )
-    analysis = analyze(prompt)
-    print(f"Briefing length: {len(analysis)} chars")
+    # Sunday morning sends the whole book regardless — a bot that only ever speaks
+    # on an exception is indistinguishable from a dead one, and this one was
+    # already dead for 30 days without anyone noticing.
+    full = briefing_type == "pre-market" and today.weekday() == 6
+
+    if alerts or full:
+        prompt = build_prompt(
+            portfolio_news, watchlist_news, market_news,
+            indicators, earnings, portfolio, watchlist, technicals, briefing_type,
+            weights, TAG, expo, alerts, full,
+        )
+        analysis = analyze(prompt)
+    else:
+        analysis = quiet_line(portfolio, expo, earnings)
+    print(f"Briefing length: {len(analysis)} chars ({'full' if full else 'monitor'})")
 
     send_telegram(analysis, bot_token, chat_id)
     print(f"Briefing sent successfully ({briefing_type})")
+    clear_alerts_pending()
 
     save_briefing_history(briefing_type, analysis)
 
