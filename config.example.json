@@ -1,9 +1,8 @@
 {
   "portfolio": {
-    "AAPL": 15.0,
-    "MSFT": 12.0,
-    "NVDA": 10.0,
-    "GOOG": 8.0
+    "AAPL": {"shares": 10},
+    "MSFT": {"shares": 5},
+    "NVDA": {"shares": 20}
   },
   "watchlist": [
     "AMZN", "META", "TSLA"

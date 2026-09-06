@@ -805,9 +805,16 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
     return technicals
 
 
+def compute_weights(portfolio, technicals):
+    """Live allocation % from share counts and current prices - no new API calls,
+    price is already fetched into technicals[ticker]['price']."""
+    vals = {t: h["shares"] * ((technicals.get(t) or {}).get("price") or 0)
+            for t, h in portfolio.items()}
+    total = sum(vals.values())
+    return {t: round(v / total * 100, 2) for t, v in vals.items()} if total else {}
 
 
-def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type):
+def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo):
     today_str = date.today().strftime("%B %d, %Y")
 
     if briefing_type == "pre-market":
@@ -838,7 +845,7 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         for e in earnings:
             eps = f"EPS est: ${e['eps_est']:.2f}" if e["eps_est"] is not None else "EPS est: N/A"
             held = "PORTFOLIO" if e["symbol"] in portfolio else "WATCHLIST"
-            alloc = f" ({portfolio[e['symbol']]}%)" if e["symbol"] in portfolio else ""
+            alloc = f" ({weights.get(e['symbol'], 0)}%)" if e["symbol"] in portfolio else ""
             earn_text += f"- [{held}] {e['symbol']}{alloc}: {e['date']} ({e['hour']}) \u2014 {eps}\n"
 
     # --- ECONOMIC CALENDAR ---
@@ -854,7 +861,7 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     for ticker, tech in technicals.items():
         if not tech or ticker not in portfolio:
             continue
-        alloc = portfolio.get(ticker, 0)
+        alloc = weights.get(ticker, 0)
         rec = tech.get("recommendation", "Hold")
         combined = tech.get("combined_score", tech.get("score", 50))
         tech_sc = tech.get("tech_score", tech.get("score", 50))
@@ -892,7 +899,11 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
         upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
         upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
         if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
-            wl_picks.append((combined, f"{ticker}: combined={combined}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]"))
+            theme_note = ""
+            theme = TAG.get(ticker)
+            if theme and rec in ("Strong Buy", "Buy") and expo.get(theme, 0) >= 25:
+                theme_note = f" (adds to {theme}, already {expo[theme]:.1f}%)"
+            wl_picks.append((combined, f"{ticker}: combined={combined}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]{theme_note}"))
 
     # combined is None for a ticker that abstained (no fundamentals), so sort it
     # as 0 rather than letting one failed fetch crash the whole briefing.
@@ -929,14 +940,14 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
             sma50_str = f"SMA50=${tech['sma50']}" if tech.get("sma50") else "SMA50=N/A"
             sma200_str = f"SMA200=${tech['sma200']}" if tech.get("sma200") else "SMA200=N/A"
             signals = ", ".join(tech.get("signals", [])) if tech.get("signals") else "no signals"
-            alloc = f" ({portfolio[ticker]}%)" if ticker in portfolio else " [WL]"
+            alloc = f" ({weights.get(ticker, 0)}%)" if ticker in portfolio else " [WL]"
             pt_mean = tech.get("target_mean")
             pt_str = f" | target=${pt_mean:.0f}" if pt_mean else ""
             tech_text += f"- {ticker}{alloc}: ${tech['price']:.2f} ({tech.get('change_pct', 0):+.2f}%) | {rsi_str} | {sma50_str} | {sma200_str} | score={tech.get('score', 'N/A')}{pt_str} | {signals}\n"
 
     # --- CONCENTRATION RISKS ---
     risk_text = "\n## Concentration Risks\n"
-    for ticker, alloc in sorted(portfolio.items(), key=lambda x: -x[1]):
+    for ticker, alloc in sorted(weights.items(), key=lambda x: -x[1]):
         if alloc > 10:
             risk_text += f"- {ticker}: {alloc}% of portfolio\n"
 
@@ -948,7 +959,7 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     news_text += "\n## Portfolio Holdings News\n"
     for ticker, articles in portfolio_news.items():
         if articles:
-            alloc = portfolio.get(ticker, 0)
+            alloc = weights.get(ticker, 0)
             news_text += f"\n### {ticker} ({alloc}% of portfolio)\n"
             for a in articles:
                 news_text += f"- {a['headline']}: {a['summary']}\n"
@@ -1102,14 +1113,15 @@ def send_telegram(text, bot_token, chat_id):
             print(f"Warning: HTML parse failed, sending as plain text")
 
 
-def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings):
+def save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings, weights):
     """Save all market data as JSON for the dashboard."""
     data_dir = os.path.join(os.path.dirname(__file__), "docs", "data")
     os.makedirs(data_dir, exist_ok=True)
 
     # Build per-ticker data
     tickers_data = {}
-    for ticker, alloc in portfolio.items():
+    for ticker in portfolio:
+        alloc = weights.get(ticker, 0)
         tech = technicals.get(ticker)
         news = portfolio_news.get(ticker, [])
         ticker_earnings = [e for e in earnings if e["symbol"] == ticker]
@@ -1200,6 +1212,15 @@ def main():
         )
         time.sleep(0.2)  # Rate limit Yahoo Finance
 
+    # Live allocation % from share counts x current price (replaces static config percentages)
+    weights = compute_weights(portfolio, technicals)
+
+    # Hand-tagged theme exposure (spec: "Thematic concentration")
+    themes = config.get("themes", {})
+    TAG = {t: name for name, tickers in themes.items() for t in tickers}
+    expo = {name: sum(weights.get(t, 0) for t in tickers) for name, tickers in themes.items()}
+    expo["untagged"] = sum(v for t, v in weights.items() if t not in TAG)
+
     # Build earnings list from Yahoo Finance calendarEvents (per-ticker)
     today = date.today()
     earnings_horizon = today + timedelta(days=14)
@@ -1248,11 +1269,12 @@ def main():
     # Save dashboard data before the AI/Telegram legs: all market data is already
     # fetched here, and the dashboard must not go stale just because Gemini or
     # Telegram is down.
-    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings)
+    save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news, indicators, earnings, weights)
 
     prompt = build_prompt(
         portfolio_news, watchlist_news, market_news,
         indicators, earnings, portfolio, watchlist, technicals, briefing_type,
+        weights, TAG, expo,
     )
     analysis = analyze(prompt)
     print(f"Briefing length: {len(analysis)} chars")
