@@ -1125,12 +1125,19 @@ def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnin
     for _, entry in wl_picks[:3]:
         standing += f"- Watchlist entry signal: {entry}\n"
 
+    # --- EXCEPTIONS (both modes) ---
+    # The full Sunday briefing carries these too: alerts_pending is cleared after
+    # any successful send, so an exception left out of the message it was cleared
+    # by is lost for good — and trigger 5 is keyed on (ticker, date), so a dropped
+    # earnings alert can never fire again for that date.
+    exc_text = "\n## EXCEPTIONS — what changed since the last run\n"
+    for a in alerts:
+        exc_text += f"- {a['ticker']} [{a['trigger']}]: {a['detail']}\n"
+    if not alerts:
+        exc_text += "- None\n"
+
     # --- MONITOR MODE: exceptions only ---
     if not full:
-        exc_text = "\n## EXCEPTIONS — the only thing to report\n"
-        for a in alerts:
-            exc_text += f"- {a['ticker']} [{a['trigger']}]: {a['detail']}\n"
-
         exc_news = ""
         for ticker in dict.fromkeys(a["ticker"] for a in alerts):   # alert order, deduped
             articles = portfolio_news.get(ticker) or watchlist_news.get(ticker) or []
@@ -1239,6 +1246,9 @@ Structure your message EXACTLY in this order:
 
 <b>\U0001f4ca {header}</b>
 
+<b>\U0001f514 WHAT CHANGED</b>
+One • bullet per entry in the EXCEPTIONS list below, all of them, in the order given. This is the only place these are reported, so do not drop any. Write "• Nothing changed since the last run." if the list says None.
+
 <b>\U0001f3af MARKET DASHBOARD</b>
 Show indices with price and arrows (\u2b06\ufe0f/\u2b07\ufe0f), VIX with arrow.
 Fear & Greed score with emoji (\U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+).
@@ -1275,7 +1285,7 @@ Flag single-position concentration (>10%) and any theme exposure at or above 25%
 Do NOT suggest stocks outside the portfolio/watchlist.
 
 DATA:
-{market_text}{earn_text}{cal_text}{algo_text}{tech_text}{risk_text}{news_text}"""
+{exc_text}{standing}{market_text}{earn_text}{cal_text}{algo_text}{tech_text}{risk_text}{news_text}"""
 
 
 def analyze(prompt):
