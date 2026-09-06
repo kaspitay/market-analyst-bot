@@ -872,6 +872,15 @@ def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
         if c0 is not None and c1 is None:
             fire(ticker, "DATA_GAP", f"scored {c0} last run, no score this run")
 
+        # 4. A veto gate newly fires or newly clears. Both runs must have been
+        #    scored — "no gate" and "gate not evaluated" are not the same state.
+        #    No weight gate: a cash-burn/leverage/margin gate is real signal
+        #    even under a small position (RIVN at 1.64% and ASTS at 1.40% both
+        #    fired real cash-burn gates and went unreported under the old gate).
+        v0, v1 = old.get("veto_reason"), cur.get("veto_reason")
+        if c0 is not None and c1 is not None and v0 != v1:
+            fire(ticker, "VETO", f"{v0 or 'none'} -> {v1 or 'none'}")
+
         if weights.get(ticker, 0) < MIN_WEIGHT:
             continue
 
@@ -908,12 +917,6 @@ def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
             if days is None or days >= HI_LO_SUPPRESS:
                 fire(ticker, f"52W_{side}", f"${price:.2f} through prior 52w {side.lower()} ${hi0 if side == 'HIGH' else lo0}")
                 hi_lo_fired[ticker] = today.isoformat()
-
-        # 4. A veto gate newly fires or newly clears. Both runs must have been
-        #    scored — "no gate" and "gate not evaluated" are not the same state.
-        v0, v1 = old.get("veto_reason"), cur.get("veto_reason")
-        if c0 is not None and c1 is not None and v0 != v1:
-            fire(ticker, "VETO", f"{v0 or 'none'} -> {v1 or 'none'}")
 
         # 5. Earnings entering the 0-3 day window, keyed on (ticker, date) so a
         #    confirmed date fires once and a rescheduled one fires again.

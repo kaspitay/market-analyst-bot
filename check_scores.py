@@ -223,13 +223,19 @@ def verify_monitor():
     expect("MA_CROSS level: same side both runs must not fire",
            "MA_CROSS" not in run({"sma50": 110, "sma200": 100}, {"sma50": 112, "sma200": 100}))
 
-    # 4. VETO — gate reason newly fires or clears.
+    # 4. VETO — gate reason newly fires or clears. Unconditional, no weight
+    #    gate (RIVN 1.64%, ASTS 1.40% both fired real cash-burn gates and went
+    #    unreported under the old per-ticker gate).
     expect("VETO edge: gate newly firing must fire",
            "VETO" in run({"combined_score": 50, "veto_reason": None},
                           {"combined_score": 50, "veto_reason": "cash_burn"}))
     expect("VETO level: same reason both runs must not fire",
            "VETO" not in run({"combined_score": 50, "veto_reason": "cash_burn"},
                               {"combined_score": 50, "veto_reason": "cash_burn"}))
+    expect("VETO below weight gate: sub-MIN_WEIGHT ticker must still fire",
+           "VETO" in run({"combined_score": 50, "veto_reason": None},
+                          {"combined_score": 50, "veto_reason": "cash_burn"},
+                          weight=0.5))
 
     # 6. DISTRIBUTION — rvol5 >= DISTRIB_RVOL and dir5 <= DISTRIB_DIR, newly true.
     d_rvol, d_dir = analyzer.DISTRIB_RVOL + 0.5, analyzer.DISTRIB_DIR - 1.0

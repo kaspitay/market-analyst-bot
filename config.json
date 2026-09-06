@@ -30,9 +30,9 @@
   },
   "ocf_veto_exempt": ["NU", "SOFI"],
   "themes": {
-    "ai-datacenter": ["NBIS", "IREN", "CIFR", "ORCL", "NVDA", "ASML", "VST", "OKLO", "CEG",
+    "ai-datacenter": ["NBIS", "IREN", "CIFR", "ORCL", "NVDA", "CRWV", "ASML", "VST", "OKLO", "CEG",
                       "AVGO", "ANET", "DELL", "TSM", "AMD", "MU", "VRT", "ARM", "ORA", "EOSE", "PLTR"],
-    "megacap-platform": ["AMZN", "GOOG", "MSFT"],
+    "megacap-platform": ["AMZN", "GOOG", "MSFT", "META"],
     "payments-fintech": ["DLO", "MA", "PGY", "SOFI", "V"],
     "enterprise-software": ["ZETA", "CRM", "NOW", "IBM", "INTU", "NICE"],
     "health-insurer": ["UNH", "ELV"]
