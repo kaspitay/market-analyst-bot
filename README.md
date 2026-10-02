@@ -115,7 +115,6 @@ GitHub Actions (cron) --> analyzer.py --> Telegram Bot API
 - GitHub account
 - Telegram account
 - Finnhub account (free)
-- Google AI Studio account (free)
 
 ### 1. Create a Telegram Bot
 

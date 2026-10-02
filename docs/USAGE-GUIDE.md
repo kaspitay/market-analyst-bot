@@ -24,8 +24,8 @@ How to get the most out of the Market Analyst Dashboard.
 
 ### Reading the Main Table
 - **Action column** shows one of Buy / Accumulate / Starter / Hold / Momentum only / Don't add / Avoid / Sell, with the fundamental and technical labels under it. The blended score is in the detail panel as "Blend".
-- **Score bar color**: green (55+) = bullish, yellow (30-55) = neutral, red (<30) = bearish
-- The score blends **Technical (40%) + Fundamental (60%)** — it favors long-term fundamentals over short-term price action
+- **Score bars** (Technical and Fundamental, in the detail panel): green (60+) = strong, yellow (40-59) = neutral, red (under 40) = weak
+- The **Blend** number combines **Technical (40%) + Fundamental (60%)** — it favors long-term fundamentals over short-term price action; the action itself comes from the two separate ratings
 
 ### When Technical and Fundamental Scores Disagree
 This is where the interesting signals are:
