@@ -1079,7 +1079,7 @@ def collapse_outage(alerts, outage):
 def outage_line(alert):
     """The whole Telegram message for an outage-only run. Built here, not by the model:
     a model rewrote 56 exceptions as 55 lines and 27 positions as 58."""
-    return f"<b>⚠️ DATA SOURCE</b> {alert['detail']}."
+    return f"<b>DATA SOURCE</b> {alert['detail']}."
 
 
 def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo, alerts=(), full=False):

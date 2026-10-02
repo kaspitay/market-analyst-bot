@@ -11,6 +11,8 @@ should produce an *intentional* diff here; anything else is a regression.
     python3 check_scores.py --verify-workflow # run label + schedule (no clock-derived type)
     python3 check_scores.py --verify-outage   # Yahoo crumb/retry/last-good-data/one-alert
     python3 check_scores.py --verify-ratings  # labels, grid, veto override, driver lines
+    python3 check_scores.py --verify-messages # golden alert/digest text, digest length
+    python3 check_scores.py --update-golden   # rewrite golden/*.txt (read the diff first)
 
 The recommendation-flip count is the number that matters: a 3-point score drift
 is noise, a Buy -> Sell flip on an 18% position is not.
@@ -33,6 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import analyzer  # noqa: E402
 import ratings  # noqa: E402
+import messages  # noqa: E402
 
 DATA = os.path.join(HERE, "docs", "data", "market-data.json")
 TOL = 0.05  # stored scores are rounded to 1dp
@@ -576,6 +579,158 @@ def verify_outage():
     return 0
 
 
+GOLDEN = os.path.join(HERE, "golden")
+
+# Two fundamental profiles for the message fixtures. The numbers are arbitrary but
+# internally consistent: the sub-scores are what compute_fundamental_score would return.
+SOUND = {"fundamentals": {"grossMargins": 0.61, "operatingMargins": 0.38, "returnOnEquity": 0.24,
+                          "revenueGrowth": 0.12, "earningsGrowth": 0.20, "trailingPE": 31.2},
+         "fund_subscores": {"valuation": 40, "profitability": 80, "growth": 55, "health": 100,
+                            "health_known": 8},
+         "quality_score": 8}
+BURNING = {"fundamentals": {"grossMargins": 0.25, "operatingMargins": -0.05, "returnOnEquity": -0.10,
+                            "revenueGrowth": 0.35, "priceToSales": 12.0},
+           "fund_subscores": {"valuation": 20, "profitability": 30, "growth": 60, "health": 25,
+                              "health_known": 8},
+           "quality_score": 2}
+
+
+def _tk(tech, fund, prev, profile, veto=None, cap=None, pos52=55.0, slope150=-0.4, ppo=-0.4):
+    """A ticker's technicals as merge_fundamentals leaves them."""
+    t = {"tech_score": tech, "fund_score": fund, "pos52": pos52, "slope150": slope150, "ppo": ppo,
+         "veto_reason": veto, **profile}
+    labels = ratings.rate(tech, fund, cap, prev)
+    t.update(labels)
+    t["drivers"] = {"tech": ratings.tech_drivers(t),
+                    "fund": ratings.fund_drivers(t["fundamentals"], t["fund_subscores"],
+                                                 t["quality_score"], veto)}
+    t["reverses_if"] = ratings.reverses_if(tech, fund, labels, cap)
+    return t
+
+
+def _with_labels(tech, ticker, exempt):
+    """A stored ticker's technicals plus the labels a run would add (no history)."""
+    tech = dict(tech)
+    _, cap = analyzer.veto_gates(tech.get("fundamentals") or {}, tech.get("financialHistory"),
+                                 ticker, exempt)
+    tech.update(ratings.rate(tech.get("tech_score"), tech.get("fund_score"), cap, {}))
+    return tech
+
+
+def verify_messages(update=False):
+    """messages.py: golden text for the alerts and the Sunday digest, the 4,000-character
+    budget on the real book, and the inputs that must not crash a render.
+
+    `update=True` (--update-golden) rewrites the golden files instead of comparing; read
+    the diff before committing them."""
+    failures = []
+    today = date(2026, 10, 4)
+
+    def expect(label, cond):
+        if not cond:
+            failures.append(label)
+
+    def golden(name, text):
+        path = os.path.join(GOLDEN, name)
+        if update:
+            os.makedirs(GOLDEN, exist_ok=True)
+            open(path, "w").write(text + "\n")
+        elif not os.path.exists(path) or open(path).read() != text + "\n":
+            failures.append(f"golden/{name} differs from the rendered text; read the diff, "
+                            f"then rerun with --update-golden")
+
+    def plain(text):
+        """What is left after the <b> headers: no bare '<' may reach Telegram or innerHTML."""
+        return re.sub(r"</?b>", "", text)
+
+    strong_up = {"fund_label": "Strong", "tech_label": "Uptrend"}
+    neutral = {"fund_label": "Neutral", "tech_label": "Neutral"}
+    T = {"NBIS": _tk(52, 70, strong_up, SOUND),
+         "IREN": _tk(30, 30, neutral, BURNING, "cash_burn", 39, pos52=18.0, slope150=-6.1, ppo=-2.3),
+         "MSFT": _tk(66, 72, {}, SOUND), "KO": _tk(50, 50, {}, SOUND),
+         "INTU": _tk(40, 80, {}, SOUND), "ANET": _tk(80, 80, {}, SOUND),
+         "PLTR": _tk(80, 80, {}, SOUND), "BABA": _tk(50, 50, {}, SOUND),
+         "OKLO": {"tech_score": None, "fund_score": None, **ratings.rate(None, None, None, {})}}
+    W = {"NBIS": 18.1, "IREN": 10.0, "MSFT": 4.0, "KO": 1.0}
+    alerts = [
+        {"ticker": "NBIS", "trigger": "ACTION_CHANGE", "detail": "Buy -> Accumulate",
+         "from": "Buy", "to": "Accumulate", "from_fund": "Strong", "from_tech": "Uptrend"},
+        {"ticker": "IREN", "trigger": "ACTION_CHANGE", "detail": "Hold -> Sell",
+         "from": "Hold", "to": "Sell", "from_fund": "Neutral", "from_tech": "Neutral"},
+        {"ticker": "IREN", "trigger": "VETO", "detail": "none -> cash_burn"},
+        {"ticker": "NVDA", "trigger": "52W_HIGH", "detail": "$236.79 through prior 52w high $235.74"},
+        {"ticker": "AMD", "trigger": "DATA_GAP", "detail": "scored 61.0 last run, no score this run"},
+        {"ticker": "MU", "trigger": "DATA_GAP", "detail": "scored 55.0 last run, no score this run"},
+    ]
+    ind = {"indices": {"sp500": {"price": 7742.48, "changesPercentage": 0.99172},
+                       "nasdaq": {"price": 27310.45, "changesPercentage": 1.63315}},
+           "vix": {"price": 15.71}, "fear_greed": {"now": 32},
+           "calendar": [{"title": "CPI (Inflation) Report", "date": "2026-10-14"},
+                        {"title": "Fed Meeting No. 7 (Day 1)", "date": "2026-10-27"},
+                        {"title": "already past", "date": "2026-09-01"}]}
+    earn = [{"symbol": "UNH", "date": "2026-10-13"}, {"symbol": "ASML", "date": "2026-10-14"}]
+    expo = {"ai-datacenter": 28.1, "megacap-platform": 4.0, "untagged": 1.0}
+    port = ["NBIS", "IREN", "MSFT", "KO"]
+    wl = ["INTU", "ANET", "PLTR", "BABA", "OKLO"]
+
+    # 1. Golden text.
+    alert_text = messages.alerts_message(alerts, T, W, today)
+    golden("alerts.txt", alert_text)
+    digest_text = messages.sunday_digest(alerts[:1], T, W, port, wl, ind, earn, expo, today, 25.0)
+    golden("sunday.txt", digest_text)
+    for name, text in (("alerts", alert_text), ("digest", digest_text)):
+        expect(f"{name}: no bare '<' after the <b> headers", "<" not in plain(text))
+        expect(f"{name}: not pre-escaped (send_telegram escapes)", "&amp;" not in text)
+
+    # 2. Inputs that must not crash a render: a replayed old-format alert, an ACTION_CHANGE whose
+    #    ticker has no technicals today, and tickers absent from the technicals dict.
+    old = [{"ticker": "X", "trigger": "REC_FLIP", "detail": "Hold -> Buy (combined 55 -> 66)"},
+           {"ticker": "Y", "trigger": "ACTION_CHANGE", "detail": "Buy -> Sell", "from": "Buy", "to": "Sell"}]
+    text = messages.alerts_message(old, {}, {}, today)
+    expect(f"a replayed old alert and a technicals-less ACTION_CHANGE must still render; got {text!r}",
+           "X  REC_FLIP: Hold -> Buy (combined 55 -> 66)" in text and "Y  Buy -> Sell" in text)
+    text = messages.sunday_digest([], {}, {}, ["AAA"], ["BBB"], {}, [], {}, today, 25.0)
+    expect(f"tickers with no technicals must land under No Data; got {text!r}",
+           "No Data (1): AAA" in text and "No Data (1): BBB" in text)
+
+    # 3. The real book fits one Telegram message, and lists every portfolio ticker.
+    data = json.load(open(DATA))
+    exempt = analyzer.load_config().get("ocf_veto_exempt", [])
+    real_T = {t: _with_labels((v or {}).get("technicals") or {}, t, exempt)
+              for t, v in data["tickers"].items()}
+    real_W = {t: v["allocation"] for t, v in data["tickers"].items() if v.get("allocation") is not None}
+    real_port = [t for t, v in data["tickers"].items() if v["type"] == "portfolio"]
+    real_wl = [t for t, v in data["tickers"].items() if v["type"] == "watchlist"]
+    real_expo = {n: sum(real_W.get(t, 0) for t in m)
+                 for n, m in analyzer.load_config().get("themes", {}).items()}
+    real = messages.sunday_digest([], real_T, real_W, real_port, real_wl, data["indicators"],
+                                  data["earnings"], real_expo, date.fromisoformat(data["updated"][:10]),
+                                  analyzer.EXPO_LIMIT)
+    expect(f"the real Sunday digest must fit one message (4,000 chars); got {len(real)}", len(real) <= 4000)
+    expect("the real digest lists every portfolio ticker", all(t in real for t in real_port))
+
+    # 4. Over budget the digest sheds sections instead of overflowing.
+    wide = [f"W{i:03d}" for i in range(60)]
+    wide_T = dict(T)
+    wide_T.update({w: {"action": "Buy"} for w in wide})
+    args = ([], wide_T, W, port, wide, ind, earn, expo, today, 25.0)
+    full_len = len(messages.sunday_digest(*args))
+    tight = messages.sunday_digest(*args, budget=full_len - 1)
+    expect(f"over budget: shorter than the full digest and within budget; got {len(tight)} vs {full_len}",
+           len(tight) <= full_len - 1)
+    expect("over budget: the watchlist collapses to counts, the portfolio and changes survive",
+           "Buy 60" in tight and "W059" not in tight and "PORTFOLIO (4)" in tight and "CHANGES" in tight)
+
+    if failures:
+        print(f"FAIL verify-messages: {len(failures)} check(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(f"verify-messages PASS: golden alerts and digest match, real digest is {len(real)} chars "
+          f"for {len(real_port) + len(real_wl)} tickers, over-budget digests shed sections.")
+    return 0
+
+
 def verify_ratings():
     """ratings.py: sticky 3-point labels, the veto override, the nine-cell table, and the
     lines that explain a rating. Pure arithmetic over dicts, so no network and no fixtures."""
@@ -732,6 +887,8 @@ if __name__ == "__main__":
         sys.exit(self_test())
     if "--verify-ratings" in sys.argv:
         sys.exit(verify_ratings())
+    if "--verify-messages" in sys.argv or "--update-golden" in sys.argv:
+        sys.exit(verify_messages(update="--update-golden" in sys.argv))
     if "--verify-monitor" in sys.argv:
         sys.exit(verify_monitor())
     changed, flips, _ = check()
