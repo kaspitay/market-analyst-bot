@@ -104,8 +104,8 @@ silently, so the first run after merge fires no `ACTION_CHANGE`. All other trigg
 ## Telegram (`messages.py`, templates only)
 
 Templates emit plain text with `<b>` headers and do not `html.escape`: `send_telegram` already escapes
-`& < >`, so escaping here would double-escape. They avoid `<` and `>` in their own text so the dashboard,
-which renders briefings as innerHTML, shows them intact. A missing field drops its clause and is never
+`& < >`, so escaping here would double-escape. They never emit a bare `<`, which would open a tag in the dashboard
+(it renders briefings as innerHTML) and in Telegram's parser; `->` is fine. A missing field drops its clause and is never
 replaced.
 
 Action change:
