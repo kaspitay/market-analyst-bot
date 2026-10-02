@@ -7,7 +7,8 @@ How to get the most out of the Market Analyst Dashboard.
 ### Morning (Before Market Opens)
 1. Check the **Telegram briefing** — scan the Market Dashboard, Earnings Alert, and Recommendations sections
 2. Open the **dashboard** — look at the main table sorted by **Action** (click the column header) to see what the algorithm recommends
-3. Click tickers flagged as **Strong Buy** or **Strong Sell** to understand why
+   Each row shows the action plus its **Fund** and **Tech** labels (fundamentals and technicals are rated separately).
+3. Click tickers marked **Buy** or **Sell** to see the drivers and the "Reverses if" line (what would change the action)
 4. Check the **Fundamentals tab** for any ticker you're considering trading
 
 ### During the Day
@@ -22,7 +23,7 @@ How to get the most out of the Market Analyst Dashboard.
 ## Understanding the Scores
 
 ### Reading the Main Table
-- **Action column** shows the combined recommendation (Strong Buy / Buy / Hold / Sell / Strong Sell) with a colored score bar
+- **Action column** shows one of Buy / Accumulate / Starter / Hold / Momentum only / Don't add / Avoid / Sell, with the fundamental and technical labels under it. The blended score is in the detail panel as "Blend".
 - **Score bar color**: green (55+) = bullish, yellow (30-55) = neutral, red (<30) = bearish
 - The score blends **Technical (40%) + Fundamental (60%)** — it favors long-term fundamentals over short-term price action
 
@@ -126,5 +127,5 @@ For your most important positions, run all available models:
 
 ### Using Watchlist
 - Add stocks you're interested in but haven't bought yet
-- The algorithm scores them the same way — when a watchlist stock hits "Strong Buy" with solid fundamentals, that's your entry signal
+- The algorithm rates them the same way — when a watchlist stock reaches **Buy** or **Accumulate** (Strong fundamentals with an Uptrend or Neutral technical), that's your entry signal
 - The Telegram briefing highlights watchlist tickers with notable entry signals

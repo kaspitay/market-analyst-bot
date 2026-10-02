@@ -12,8 +12,8 @@ An automated stock market analysis system with a live dashboard and daily Telegr
   daily candles. The run type comes from the trigger, never from the clock.
 
 This is a silent-by-default **exception monitor**, not a twice-daily restated snapshot. It only
-sends a real message when something actually changed since the last run: a recommendation bucket
-flip, a veto gate firing or clearing, a new 52-week high/low, earnings entering the next few days,
+sends a real message when something actually changed since the last run: an action change
+(for example Buy to Accumulate), a veto gate firing or clearing, a new 52-week high/low, earnings entering the next few days,
 a distribution (heavy selling volume) day, or thematic concentration drifting past its exposure
 threshold. On a quiet day it sends one short "Nothing changed" line instead of restating the whole
 portfolio. **Sunday mornings always send the full per-position briefing** regardless of what
@@ -23,7 +23,7 @@ If Yahoo fundamentals fail for half the tickers or more (an outage, not a compan
 keeps each ticker's last good scores for up to 7 days and sends **one line** instead of one alert
 per ticker.
 
-The AI (Gemini) reviews the algorithm's pre-computed decisions and exceptions, adding news context and flagging disagreements.
+Messages are built from code templates, so every number in them comes straight from the data. No model writes the Telegram text.
 
 ### Live Dashboard (GitHub Pages)
 - **Market Overview** — S&P 500, Dow, NASDAQ, VIX with Fear & Greed gauge
@@ -59,6 +59,22 @@ The analyst price target is **display-only** — it is not part of the score.
 
 Recommendation thresholds: Strong Buy (72+), Buy (60+), Hold (40+), Sell (28+), Strong Sell (<28).
 
+### Ratings Grid
+Fundamentals and technicals are rated **separately** and never blended into the action:
+**Strong / Neutral / Weak** fundamentals (score ≥60 / 40-60 / <40) and **Uptrend / Neutral / Downtrend**
+technicals, combined into one action:
+
+| | Uptrend | Neutral | Downtrend |
+|---|---|---|---|
+| **Strong** | Buy | Accumulate | Starter |
+| **Neutral** | Hold | Hold | Don't add |
+| **Weak** | Momentum only | Avoid | Sell |
+
+A label only moves once its score clears the edge by 3 points, so a name sitting on 60 does not flip every
+day. A veto gate bypasses that: cash burn forces Weak, leverage or margin erosion forces at most Neutral.
+Each ticker carries its drivers and a "reverses if" line (the nearest score edge that would change the
+action). The blended score above is kept as a secondary number.
+
 ## 5-Year Price Calculator
 
 Three valuation models with interactive sliders:
@@ -82,9 +98,6 @@ GitHub Actions (cron) --> analyzer.py --> Telegram Bot API
               (news)      (F&G/indices) (OHLCV/fundamentals)
                     |
                     v
-                Gemini AI (reviews algorithm output)
-                    |
-                    v
               docs/data/market-data.json --> GitHub Pages Dashboard
 ```
 
@@ -93,9 +106,8 @@ GitHub Actions (cron) --> analyzer.py --> Telegram Bot API
 | Source | Data | Cost |
 |--------|------|------|
 | [Yahoo Finance](https://finance.yahoo.com) | OHLCV, technicals, fundamentals (P/E, margins, FCF, etc.), analyst price targets, VIX | Free |
-| [Finnhub](https://finnhub.io) | Company news, market news, earnings calendar | Free (60 calls/min) |
+| [Finnhub](https://finnhub.io) | Company news, earnings calendar | Free (60 calls/min) |
 | [feargreedmeter.com](https://feargreedmeter.com) | Fear & Greed Index, S&P/Dow/NASDAQ, economic calendar | Free (scraped) |
-| [Gemini API](https://aistudio.google.com) | AI-powered briefing generation | Free tier (Flash Lite) |
 
 ## Setup
 
@@ -117,7 +129,6 @@ GitHub Actions (cron) --> analyzer.py --> Telegram Bot API
 ### 2. Get API Keys
 
 - **Finnhub:** Sign up at https://finnhub.io (free), copy API key
-- **Google Gemini:** Go to https://aistudio.google.com/apikey, create key
 
 ### 3. Configure Your Portfolio
 
@@ -154,7 +165,7 @@ Two more keys `main()` reads that aren't obvious from the shape above:
 
 1. Fork this repository
 2. Go to **Settings > Secrets and variables > Actions**
-3. Add secrets: `GEMINI_API_KEY`, `FINNHUB_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+3. Add secrets: `FINNHUB_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 4. Enable GitHub Pages (Settings > Pages > Source: Deploy from branch, Branch: main, Folder: /docs)
 5. The bot runs automatically on schedule, or trigger manually from the Actions tab
 
@@ -165,40 +176,11 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-export GEMINI_API_KEY="your-key"
 export FINNHUB_API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-token"
 export TELEGRAM_CHAT_ID="your-chat-id"
 
 python analyzer.py pre-market
-```
-
-## Upgrading the AI Model
-
-Default is **Gemini 2.5 Flash Lite** (free). Options:
-
-| Model | Provider | Cost | How |
-|-------|----------|------|-----|
-| Gemini 2.5 Flash | Google | Free (limited) | Change model name in `analyzer.py` |
-| Llama 3.3 70B | Groq | Free | See below |
-| Claude Haiku 4.5 | Anthropic | ~$0.50/mo | Replace `analyze()` function |
-| GPT-4o Mini | OpenAI | ~$0.30/mo | Replace `analyze()` function |
-
-### Switching to Groq (Free)
-
-1. Sign up at https://console.groq.com
-2. Add `GROQ_API_KEY` to GitHub secrets
-3. Replace the `analyze()` function in `analyzer.py`:
-
-```python
-def analyze(prompt):
-    api_key = os.environ["GROQ_API_KEY"]
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048}
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
 ```
 
 ## Customization
@@ -211,13 +193,13 @@ schedule:
   - cron: "0 2 * * *"  # 02:00 UTC — the only scheduled run (monitor mode); must land before the US open
 ```
 
-### Change Analysis Style
+### Change Message Format
 
-Edit `build_prompt()` in `analyzer.py`. The prompt controls the Telegram briefing structure, sections, and character limit.
+Edit the templates in `messages.py`. `golden/` pins the exact text: after a change run `python3 check_scores.py --verify-messages`, read the diff, then `--update-golden`.
 
 ## Cost
 
-Everything runs on free tiers: GitHub Actions, Finnhub, Yahoo Finance, Telegram, Gemini Flash Lite. **$0/month.**
+Everything runs on free tiers: GitHub Actions, Finnhub, Yahoo Finance, Telegram. **$0/month.**
 
 ## License
 
