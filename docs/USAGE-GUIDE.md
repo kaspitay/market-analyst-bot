@@ -23,7 +23,7 @@ How to get the most out of the Market Analyst Dashboard.
 ## Understanding the Scores
 
 ### Reading the Main Table
-- **Action column** shows one of Buy / Accumulate / Starter / Hold / Momentum only / Don't add / Avoid / Sell, with the fundamental and technical labels under it. The blended score is in the detail panel as "Blend".
+- **Action column** shows one of Buy / Accumulate / Starter / Hold / Momentum only / Don't add / Avoid / Sell, with the fundamental and technical labels under it. The blended score is in the detail panel as "Blend". Hover a tag for its one-phrase gloss (for example Accumulate: scale in).
 - **Score bars** (Technical and Fundamental, in the detail panel): green (60+) = strong, yellow (40-59) = neutral, red (under 40) = weak
 - The **Blend** number combines **Technical (40%) + Fundamental (60%)** — it favors long-term fundamentals over short-term price action; the action itself comes from the two separate ratings
 

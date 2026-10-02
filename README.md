@@ -75,6 +75,11 @@ day. A veto gate bypasses that: cash burn forces Weak, leverage or margin erosio
 Each ticker carries its drivers and a "reverses if" line (the nearest score edge that would change the
 action). The blended score above is kept as a secondary number.
 
+Each action also carries a one-phrase gloss, shown as a tooltip on the dashboard and next to the new tag in
+Telegram alerts: Buy "add", Accumulate "scale in", Starter "small, wait for trend repair", Hold "trend intact"
+(only with Neutral fundamentals and an Uptrend), Don't add "consider trimming", Momentum only "tight stop".
+Avoid and Sell carry none.
+
 ## 5-Year Price Calculator
 
 Three valuation models with interactive sliders:

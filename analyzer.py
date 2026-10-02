@@ -851,6 +851,7 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
         "fund": ratings.fund_drivers(fund, subscores, quality, veto_reason),
     }
     technicals["reverses_if"] = ratings.reverses_if(tech_score, fund_score, technicals, veto_cap)
+    technicals["action_gloss"] = ratings.gloss(technicals["action"], technicals["tech_label"])
 
     # Merge reasons
     technicals["score_reasons"] = technicals.get("score_reasons", []) + fund_reasons

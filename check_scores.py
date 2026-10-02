@@ -943,6 +943,21 @@ def verify_ratings():
            60 <= back["fund_score"] < 63 and back["fund_label"] == "Neutral"
            and "last_action" not in back and "last_fund_label" not in back)
 
+    # 10. The one-phrase gloss per action tag (spec: "Detail line per tag").
+    glosses = {"Buy": "add", "Accumulate": "scale in", "Starter": "small, wait for trend repair",
+               "Don't add": "consider trimming", "Momentum only": "tight stop"}
+    for tag, text in glosses.items():
+        expect(f"{tag} must read '{text}'; got {ratings.gloss(tag, 'Neutral')!r}",
+               ratings.gloss(tag, "Neutral") == text)
+    expect("Hold in the Neutral/Uptrend cell reads 'trend intact'",
+           ratings.gloss("Hold", "Uptrend") == "trend intact")
+    expect("Hold in Neutral/Neutral has no gloss (the spec glosses only the Uptrend cell)",
+           ratings.gloss("Hold", "Neutral") is None)
+    expect("Avoid, Sell and No Data have no gloss",
+           all(ratings.gloss(t, "Neutral") is None for t in ("Avoid", "Sell", "No Data")))
+    expect(f"merge stores the gloss of the action it names; got {m['action']!r}, {m.get('action_gloss')!r}",
+           m["action"] == "Accumulate" and m.get("action_gloss") == "scale in")
+
     if failures:
         print(f"FAIL verify-ratings: {len(failures)} check(s) failed:")
         for f in failures:

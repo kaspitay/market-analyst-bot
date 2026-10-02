@@ -5,12 +5,14 @@ Output is plain text plus <b> headers. send_telegram() escapes & < > itself, so
 nothing here may html.escape (it would be escaped twice), and nothing here may emit
 a bare '<' (it would open a tag in Telegram and in the dashboard's innerHTML).
 """
-from ratings import ACTION_ORDER
+from ratings import ACTION_ORDER, gloss
 
 
 def _action_block(a, veto, t, weight, detail=2):
     """detail 2: head + why + reverses if; 1: head + why; 0: head only (what a busy day sheds to)."""
     head = f"{a['ticker']}  {a['from']} -> {a['to']}"
+    if gloss(a["to"], t.get("tech_label")):
+        head += f" ({gloss(a['to'], t.get('tech_label'))})"
     if weight is not None:
         head += f"  ({weight:.1f}% of book)"
     why = [f"veto {veto['detail']}"] if veto else []
