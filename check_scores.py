@@ -245,6 +245,21 @@ def verify_monitor():
            and carried.get("from_fund") == "Strong" and carried.get("from_tech") == "Uptrend"
            and carried.get("detail") == "Buy -> Starter")
 
+    # 1b. A fundamentals gap must not erase the last real action: the return is compared with it.
+    got, _ = analyzer.compute_exceptions(
+        _prev({"T": {"action": "No Data", "fund_label": None, "tech_label": "Uptrend",
+                     "last_action": "Buy", "last_fund_label": "Strong"}}),
+        {"T": {"action": "Hold", "fund_label": "Neutral", "tech_label": "Uptrend"}},
+        {"T": WEIGHT}, {}, {}, T0)
+    carried = next((a for a in got if a["trigger"] == "ACTION_CHANGE"), {})
+    expect(f"ACTION_CHANGE across a data gap compares with the pre-gap action; got {carried}",
+           carried.get("from") == "Buy" and carried.get("to") == "Hold"
+           and carried.get("from_fund") == "Strong" and carried.get("from_tech") == "Uptrend")
+    expect("ACTION_CHANGE across a data gap: back to the same action is silent",
+           "ACTION_CHANGE" not in run({"action": "No Data", "last_action": "Hold"}, {"action": "Hold"}))
+    expect("ACTION_CHANGE: still in the gap (No Data now) is silent",
+           "ACTION_CHANGE" not in run({"action": "No Data", "last_action": "Buy"}, {"action": "No Data"}))
+
     # 2. MA_CROSS — SMA50/SMA200 sign flip.
     expect("MA_CROSS edge: sign flip must fire",
            "MA_CROSS" in run({"sma50": 90, "sma200": 100}, {"sma50": 110, "sma200": 100}))
@@ -901,6 +916,32 @@ def verify_ratings():
     expect("merge: the blended score and recommendation are untouched",
            m["combined_score"] is not None
            and m["recommendation"] in ("Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"))
+
+    # 9. A fundamentals gap must not erase the last real rating or its stickiness.
+    mid = dict(fund_data["fundamentals"], trailingPE=15.0, priceToSales=3.0, revenueGrowth=0.05,
+               earningsGrowth=0.05, currentYearGrowth=0.05, grossMargins=0.2, operatingMargins=0.05,
+               returnOnEquity=0.05)
+    no_fund = {"fundamentals": {}, "price_target": {}, "earnings": {}}
+
+    def merged_with(data, prev=None):
+        t = {"score": 52.0, "price": 100.0, "pos52": 55.0, "slope150": -0.4, "ppo": -0.4,
+             "score_reasons": []}
+        return analyzer.merge_fundamentals(t, data, None, "T", [], prev=prev)
+
+    held = {"fund_label": "Neutral", "tech_label": "Neutral", "action": "Hold"}
+    gap = merged_with(no_fund, held)
+    expect(f"gap run: No Data, and the last real rating is remembered; got {gap.get('action')}, "
+           f"{gap.get('last_action')}, {gap.get('last_fund_label')}",
+           gap["action"] == "No Data" and gap.get("last_action") == "Hold"
+           and gap.get("last_fund_label") == "Neutral")
+    gap2 = merged_with(no_fund, gap)
+    expect("a second gap run still remembers the same rating",
+           gap2.get("last_action") == "Hold" and gap2.get("last_fund_label") == "Neutral")
+    back = merged_with(dict(fund_data, fundamentals=mid), gap2)
+    expect(f"returning at fund score {back['fund_score']} (60-63) keeps the pre-gap Neutral "
+           f"instead of re-reading Strong from the plain edge",
+           60 <= back["fund_score"] < 63 and back["fund_label"] == "Neutral"
+           and "last_action" not in back and "last_fund_label" not in back)
 
     if failures:
         print(f"FAIL verify-ratings: {len(failures)} check(s) failed:")

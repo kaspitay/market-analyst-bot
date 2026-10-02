@@ -837,7 +837,15 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
 
     # Separate fundamental and technical labels and the action they name. fund_score is
     # already capped above; the cap also bypasses the label band (see ratings.rate).
-    technicals.update(ratings.rate(tech_score, fund_score, veto_cap, prev or {}))
+    # A fundamentals gap must not erase the last real rating: through it, remember the
+    # pre-gap fundamental label and action (last_*), feed the label back in so the return
+    # keeps its stickiness, and let compute_exceptions compare the return with the action.
+    p = prev or {}
+    was = {"fund_label": p.get("fund_label") or p.get("last_fund_label"), "tech_label": p.get("tech_label")}
+    technicals.update(ratings.rate(tech_score, fund_score, veto_cap, was))
+    if fund_score is None:
+        technicals["last_fund_label"] = was["fund_label"]
+        technicals["last_action"] = p.get("last_action") if p.get("action") in (None, "No Data") else p.get("action")
     technicals["drivers"] = {
         "tech": ratings.tech_drivers(technicals),
         "fund": ratings.fund_drivers(fund, subscores, quality, veto_reason),
@@ -946,9 +954,12 @@ def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
         #    stays silent; a missing action (first run after the grid shipped, or No
         #    Data) baselines silently — DATA_GAP owns the No Data case.
         a0, a1 = old.get("action"), cur.get("action")
+        if a0 in (None, "No Data"):              # coming out of a fundamentals gap: the pre-gap action
+            a0 = old.get("last_action")
         if a0 not in (None, "No Data") and a1 not in (None, "No Data") and a0 != a1:
             fire(ticker, "ACTION_CHANGE", f"{a0} -> {a1}",
-                 **{"from": a0, "to": a1, "from_fund": old.get("fund_label"),
+                 **{"from": a0, "to": a1,
+                    "from_fund": old.get("fund_label") or old.get("last_fund_label"),
                     "from_tech": old.get("tech_label")})
 
         # 2. SMA50/SMA200 sign flip.
