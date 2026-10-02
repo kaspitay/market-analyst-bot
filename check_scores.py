@@ -739,6 +739,22 @@ def verify_messages(update=False):
            bt(alerts[:1], False).startswith("<b>MONITOR</b>"))
     expect("a quiet day sends the quiet line", bt([], False).startswith("Nothing changed."))
 
+    # 6. A busy day must still fit one message. The MONITOR message has a single <b> header, so
+    #    send_telegram cannot split it: a message over the limit is rejected, the send raises,
+    #    alerts_pending is never cleared, and every later run replays the same oversize message.
+    many = {f"S{i:02d}": _tk(52, 70, strong_up, SOUND) for i in range(18)}
+    busy = [{"ticker": k, "trigger": "ACTION_CHANGE", "detail": "Buy -> Accumulate", "from": "Buy",
+             "to": "Accumulate", "from_fund": "Strong", "from_tech": "Uptrend"} for k in many]
+    busy_w = {k: 5.0 for k in many}
+    text = messages.alerts_message(busy, many, busy_w, today)
+    expect(f"a busy day's alert message must fit one Telegram message; got {len(text)}", len(text) <= 4000)
+    expect("a busy day keeps every ticker's head line",
+           all(f"{k}  Buy -> Accumulate" in text for k in many))
+    text = messages.sunday_digest(busy, many, busy_w, list(many), [], ind, earn, expo, today, 25.0)
+    expect(f"a busy Sunday digest must fit one Telegram message; got {len(text)}", len(text) <= 4000)
+    expect("a busy Sunday digest keeps every ticker's head line",
+           all(f"{k}  Buy -> Accumulate" in text for k in many))
+
     if failures:
         print(f"FAIL verify-messages: {len(failures)} check(s) failed:")
         for f in failures:

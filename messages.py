@@ -8,7 +8,8 @@ a bare '<' (it would open a tag in Telegram and in the dashboard's innerHTML).
 from ratings import ACTION_ORDER
 
 
-def _action_block(a, veto, t, weight):
+def _action_block(a, veto, t, weight, detail=2):
+    """detail 2: head + why + reverses if; 1: head + why; 0: head only (what a busy day sheds to)."""
     head = f"{a['ticker']}  {a['from']} -> {a['to']}"
     if weight is not None:
         head += f"  ({weight:.1f}% of book)"
@@ -23,14 +24,14 @@ def _action_block(a, veto, t, weight):
         part = f"{axis} {before} -> {now}" if before and before != now else f"{axis} {now}"
         why.append(part + (": " + ", ".join(ds) if ds else ""))
     lines = [head]
-    if why:
+    if why and detail >= 1:
         lines.append("why: " + "; ".join(why))
-    if t.get("reverses_if"):
+    if t.get("reverses_if") and detail >= 2:
         lines.append("reverses if: " + t["reverses_if"])
     return "\n".join(lines)
 
 
-def _changes(alerts, technicals, weights):
+def _changes(alerts, technicals, weights, detail=2):
     """(blocks, lines): one block per ACTION_CHANGE (a VETO on the same ticker folds into it),
     then one line per other alert, with isolated DATA_GAPs collapsed into a single line."""
     by_ticker = {}
@@ -38,7 +39,7 @@ def _changes(alerts, technicals, weights):
         by_ticker.setdefault(a["ticker"], {})[a["trigger"]] = a
     acted = [t for t, d in by_ticker.items() if "ACTION_CHANGE" in d]
     blocks = [_action_block(by_ticker[t]["ACTION_CHANGE"], by_ticker[t].get("VETO"),
-                            technicals.get(t) or {}, weights.get(t))
+                            technicals.get(t) or {}, weights.get(t), detail)
               for t in sorted(acted, key=lambda t: -weights.get(t, 0))]
     lines, gaps = [], []
     for a in alerts:
@@ -57,10 +58,17 @@ def _join(blocks, lines):
     return "\n\n".join(blocks + (["\n".join(lines)] if lines else []))
 
 
-def alerts_message(alerts, technicals, weights, today):
-    blocks, lines = _changes(alerts, technicals, weights)
-    n = len(blocks) + len(lines)
-    return f"<b>MONITOR</b> {today.isoformat()}  {n} update{'s' if n != 1 else ''}\n\n" + _join(blocks, lines)
+def alerts_message(alerts, technicals, weights, today, budget=4000):
+    """One message. This one has a single <b> header, so send_telegram cannot split it and
+    a message over the limit is rejected: a busy day sheds the reverses-if lines, then the
+    why lines, and keeps every head line (the part that is the signal)."""
+    for detail in (2, 1, 0):
+        blocks, lines = _changes(alerts, technicals, weights, detail)
+        n = len(blocks) + len(lines)
+        text = f"<b>MONITOR</b> {today.isoformat()}  {n} update{'s' if n != 1 else ''}\n\n" + _join(blocks, lines)
+        if len(text) <= budget:
+            break
+    return text
 
 
 def _book(tickers, technicals, weights, counts_only=False):
@@ -101,12 +109,13 @@ def _market(ind):
 def sunday_digest(alerts, technicals, weights, portfolio, watchlist, indicators, earnings,
                   expo, today, expo_limit, budget=4000):
     """The whole Sunday message. Over budget, it sheds in order: watchlist names -> counts,
-    the calendar, the market line. 4000 is send_telegram's own split point."""
-    blocks, lines = _changes(alerts, technicals, weights)
+    the calendar, the market line, the reverses-if lines, the why lines. 4000 is
+    send_telegram's own split point."""
     calendar = [c for c in (indicators or {}).get("calendar") or [] if c.get("date", "") >= today.isoformat()][:3]
     themes = sorted(((n, v) for n, v in expo.items() if n != "untagged" and v > 0), key=lambda x: -x[1])
 
     def build(stage):
+        blocks, lines = _changes(alerts, technicals, weights, detail=max(0, 2 - max(0, stage - 3)))
         s = [("WEEKLY BOOK", None, today.isoformat()),
              ("CHANGES", _join(blocks, lines) or "none since the last run", None),
              (f"PORTFOLIO ({len(portfolio)})", _book(portfolio, technicals, weights), None),
@@ -122,7 +131,7 @@ def sunday_digest(alerts, technicals, weights, portfolio, watchlist, indicators,
         return "\n\n".join(f"<b>{t}</b>" + (f" {tail}" if tail else "") + (f"\n{body}" if body else "")
                            for t, body, tail in s)
 
-    for stage in range(4):
+    for stage in range(6):
         text = build(stage)
         if len(text) <= budget:
             break
