@@ -216,13 +216,31 @@ def verify_monitor():
                                                  {"T": weight}, {}, {}, T0)
         return {a["trigger"] for a in alerts if a["ticker"] == "T"}
 
-    # 1. REC_FLIP — bucket flip beyond REC_HYSTERESIS combined points.
-    lo, hi = analyzer._bucket_edges(55.0)
-    c1 = hi + analyzer.REC_HYSTERESIS + 0.1
-    expect("REC_FLIP edge: bucket flip beyond hysteresis must fire",
-           "REC_FLIP" in run({"combined_score": 55.0}, {"combined_score": c1}))
-    expect("REC_FLIP level: unchanged score must not fire",
-           "REC_FLIP" not in run({"combined_score": c1}, {"combined_score": c1}))
+    # 1. ACTION_CHANGE — the action tag changed. The labels are damped upstream
+    #    (ratings.rate), so there is no band here.
+    expect("ACTION_CHANGE edge: a tag change must fire",
+           "ACTION_CHANGE" in run({"action": "Buy"}, {"action": "Accumulate"}))
+    expect("ACTION_CHANGE level: the same tag must not fire",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "Buy"}))
+    expect("ACTION_CHANGE: Hold in two different cells is silent (same tag)",
+           "ACTION_CHANGE" not in run({"action": "Hold", "tech_label": "Uptrend"},
+                                      {"action": "Hold", "tech_label": "Neutral"}))
+    expect("ACTION_CHANGE: no previous action (first run after the grid ships) baselines silently",
+           "ACTION_CHANGE" not in run({"combined_score": 50}, {"action": "Buy"}))
+    expect("ACTION_CHANGE: to or from No Data is DATA_GAP's job, not this trigger's",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "No Data"})
+           and "ACTION_CHANGE" not in run({"action": "No Data"}, {"action": "Buy"}))
+    expect("ACTION_CHANGE below the weight gate must not fire",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "Sell"}, weight=0.5))
+    got, _ = analyzer.compute_exceptions(
+        _prev({"T": {"action": "Buy", "fund_label": "Strong", "tech_label": "Uptrend"}}),
+        {"T": {"action": "Starter", "fund_label": "Strong", "tech_label": "Downtrend"}},
+        {"T": WEIGHT}, {}, {}, T0)
+    carried = next((a for a in got if a["trigger"] == "ACTION_CHANGE"), {})
+    expect(f"ACTION_CHANGE carries what a replayed alert needs; got {carried}",
+           carried.get("from") == "Buy" and carried.get("to") == "Starter"
+           and carried.get("from_fund") == "Strong" and carried.get("from_tech") == "Uptrend"
+           and carried.get("detail") == "Buy -> Starter")
 
     # 2. MA_CROSS — SMA50/SMA200 sign flip.
     expect("MA_CROSS edge: sign flip must fire",

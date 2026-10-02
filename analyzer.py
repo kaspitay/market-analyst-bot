@@ -58,7 +58,6 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "docs", "data", "market-data
 
 # --- Monitor mode: debounce constants (see the spec's "Monitor mode" table) ---
 MIN_WEIGHT = 2.0        # per-ticker triggers are portfolio-only, >= 2% of the book
-REC_HYSTERESIS = 3.0    # 1: a bucket flip under 3 combined points is noise (526 raw -> 84)
 HI_LO_SUPPRESS = 21     # 3: days before the same ticker may report a new 52w extreme again
 DISTRIB_RVOL = 1.5      # 6: 5-day volume vs the prior 20-day average
 DISTRIB_DIR = -2.0      # 6: net signed volume, in average-days, over those 5 sessions
@@ -72,13 +71,6 @@ EXPO_HYSTERESIS = 2.0   # 9
 OUTAGE_SHARE = 0.5      # fundamentals missing for this share of tickers = Yahoo is down, not 28 company problems
 FUND_MAX_AGE_DAYS = 7   # last-good fundamentals older than this are not served as current
 PT_KEYS = ("target_high", "target_low", "target_mean", "target_median", "num_analysts")
-
-
-def _bucket_edges(score):
-    """[low, high) score range of the recommendation bucket `score` falls in."""
-    edges = sorted(THRESHOLDS.values())
-    return (max((e for e in edges if e <= score), default=float("-inf")),
-            min((e for e in edges if e > score), default=float("inf")))
 
 
 def score_to_recommendation(score):
@@ -926,8 +918,8 @@ def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
 
     alerts = []
 
-    def fire(name, trigger, detail):
-        alerts.append({"ticker": name, "trigger": trigger, "detail": detail})
+    def fire(name, trigger, detail, **extra):
+        alerts.append({"ticker": name, "trigger": trigger, "detail": detail, **extra})
 
     for ticker, cur in technicals.items():
         cur = cur or {}
@@ -957,19 +949,15 @@ def compute_exceptions(prev_data, technicals, weights, themes, expo, today):
         if weights.get(ticker, 0) < MIN_WEIGHT:
             continue
 
-        # 1. Recommendation bucket flip. The band is on the boundary, not on the
-        #    move: the score has to leave last run's bucket by 3 points, so a name
-        #    sitting on 60 does not flip Buy/Hold on every 0.4-point wobble. Raw
-        #    flips run 570 over the stored history; this filter leaves 73.
-        #    ponytail: stateless, so a drift that crosses a boundary in sub-3-point
-        #    steps is never reported (measured: 2 such moves in 181 runs). Upgrade
-        #    is to hold the last *reported* bucket in `monitor` and band against
-        #    that instead — 34 fires vs 32, if those 2 turn out to matter.
-        if c0 is not None and c1 is not None:
-            lo, hi = _bucket_edges(c0)
-            if c1 >= hi + REC_HYSTERESIS or c1 < lo - REC_HYSTERESIS:
-                fire(ticker, "REC_FLIP", f"{score_to_recommendation(c0)} -> "
-                                         f"{score_to_recommendation(c1)} (combined {c0} -> {c1})")
+        # 1. Action tag change. ratings.rate already damped each label by 3 points, so
+        #    there is no band here. Hold in two different cells is the same tag and
+        #    stays silent; a missing action (first run after the grid shipped, or No
+        #    Data) baselines silently — DATA_GAP owns the No Data case.
+        a0, a1 = old.get("action"), cur.get("action")
+        if a0 not in (None, "No Data") and a1 not in (None, "No Data") and a0 != a1:
+            fire(ticker, "ACTION_CHANGE", f"{a0} -> {a1}",
+                 **{"from": a0, "to": a1, "from_fund": old.get("fund_label"),
+                    "from_tech": old.get("tech_label")})
 
         # 2. SMA50/SMA200 sign flip.
         s50_0, s200_0 = old.get("sma50"), old.get("sma200")
