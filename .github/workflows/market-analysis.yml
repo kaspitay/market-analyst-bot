@@ -2,11 +2,13 @@ name: Market Analysis
 
 on:
   schedule:
-    # 7:30 AM ET (UTC-4) — daily, and the only scheduled run. The 18:00 UTC
-    # pre-close run scored every ticker against a still-forming daily candle,
-    # which moved combined_score more at the median (0.60) than a whole
-    # overnight session did (0.20) — monitor mode would report that as news.
-    - cron: "30 11 * * *"
+    # 02:00 UTC — daily, and the only scheduled run. GitHub starts scheduled runs
+    # 3-7h late (11h at worst, measured Aug-Oct 2026), so 02:00 lands 05:00-13:00
+    # UTC: always before the US open (13:30 UTC), when every daily candle is
+    # complete. At 11:30 UTC the delayed run landed mid-session and scored a
+    # still-forming candle, which moved combined_score more at the median (0.60)
+    # than a whole overnight session did (0.20) — monitor mode reports that as news.
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       briefing_type:
@@ -34,19 +36,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Never derive the type from the clock: scheduled runs start hours late, and
+      # `pre-market` is what unlocks the Sunday full briefing. `inputs.*` is empty
+      # on a schedule event, so the cron run is always pre-market.
       - name: Determine briefing type
         id: briefing
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "type=${{ inputs.briefing_type }}" >> $GITHUB_OUTPUT
-          else
-            HOUR=$(date -u +%H)
-            if [ "$HOUR" -lt 15 ]; then
-              echo "type=pre-market" >> $GITHUB_OUTPUT
-            else
-              echo "type=pre-close" >> $GITHUB_OUTPUT
-            fi
-          fi
+        run: echo "type=${{ inputs.briefing_type || 'pre-market' }}" >> $GITHUB_OUTPUT
 
       - name: Run analysis
         env:
