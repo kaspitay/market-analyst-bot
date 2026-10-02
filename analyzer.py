@@ -5,6 +5,7 @@ import math
 import subprocess
 import time
 import requests
+import ratings
 from datetime import date, datetime, timedelta
 
 
@@ -329,6 +330,7 @@ def fetch_technicals(ticker):
             "price": current, "prev_close": prev_close, "change_pct": change_pct, "ytd_pct": ytd_pct,
             "rsi": rsi, "sma50": sma50, "sma200": sma200,
             "ppo": ppo, "pos52": round(pos52, 1) if pos52 is not None else None,
+            "slope150": round(slope150, 2) if slope150 is not None else None,
             "high_52w": high_52w, "low_52w": low_52w,
             "rvol5": rvol5, "dir5": dir5,
             "signals": signals,
@@ -635,15 +637,15 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
                               financial_history=None):
     """Compute 0-100 fundamental score from valuation, profitability, growth and health.
 
-    Returns (score, reasons, quality, quality_details) — quality is the raw
+    Returns (score, reasons, quality, quality_details, subscores) — quality is the raw
     Piotroski F-score pass count (quality_details its labels), or (None, [])
-    when no signal was computable at all. Returns (None, [], None, []) when
+    when no signal was computable at all. Returns (None, [], None, [], {}) when
     there are no fundamentals at all — a ticker with no data must abstain, not
     read as a neutral "Hold". The analyst price target is reported in `reasons`
     but is deliberately not part of the score: it is sentiment, not a fundamental.
     """
     if not fund:
-        return None, [], None, []
+        return None, [], None, [], {}
     reasons = []
 
     # 1. Valuation (0.20) — sector-relative P/E and P/S
@@ -738,7 +740,10 @@ def compute_fundamental_score(fund, price, target_mean, num_analysts, sector=Non
     legs = [(0.20, val_score), (0.25, prof_score), (0.20, grow_score), (0.35, health_score)]
     coverage = sum(w for w, v in legs if v is not None)
     fund_total = sum(w * v for w, v in legs if v is not None) / coverage
-    return round(fund_total, 1), reasons, quality, quality_details
+    # The four legs, for the explain line. health_known is the F-score denominator.
+    subscores = {"valuation": round(val_score), "profitability": round(prof_score),
+                 "growth": round(grow_score), "health": health_score, "health_known": len(known)}
+    return round(fund_total, 1), reasons, quality, quality_details, subscores
 
 
 def veto_gates(fund, financial_history, ticker, ocf_veto_exempt):
@@ -785,7 +790,7 @@ def veto_gates(fund, financial_history, ticker, ocf_veto_exempt):
 
 
 def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=None,
-                       ocf_veto_exempt=None):
+                       ocf_veto_exempt=None, prev=None):
     """Merge fundamentals and price targets into technicals, compute combined score."""
     if not technicals:
         return technicals
@@ -813,12 +818,13 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
     technicals["tech_score"] = tech_score
 
     # Compute fundamental score
-    fund_score, fund_reasons, quality, quality_details = compute_fundamental_score(
+    fund_score, fund_reasons, quality, quality_details, subscores = compute_fundamental_score(
         fund, technicals.get("price"), pt.get("target_mean"), pt.get("num_analysts"),
         sector=fund.get("sector"), financial_history=financial_history,
     )
     technicals["quality_score"] = quality
     technicals["quality_details"] = quality_details
+    technicals["fund_subscores"] = subscores
 
     # Veto gates cap both the fundamental score and the combined score. Capping
     # only fund_score is 40% defanged — at tech >= 55 a Sell-ceilinged name still
@@ -844,6 +850,15 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
 
     # Keep pure technical recommendation
     technicals["tech_recommendation"] = score_to_recommendation(tech_score)
+
+    # Separate fundamental and technical labels and the action they name. fund_score is
+    # already capped above; the cap also bypasses the label band (see ratings.rate).
+    technicals.update(ratings.rate(tech_score, fund_score, veto_cap, prev or {}))
+    technicals["drivers"] = {
+        "tech": ratings.tech_drivers(technicals),
+        "fund": ratings.fund_drivers(fund, subscores, quality, veto_reason),
+    }
+    technicals["reverses_if"] = ratings.reverses_if(tech_score, fund_score, technicals, veto_cap)
 
     # Merge reasons
     technicals["score_reasons"] = technicals.get("score_reasons", []) + fund_reasons
@@ -1575,7 +1590,8 @@ def main():
     for ticker in all_tickers:
         fund_data, fh = raw[ticker]
         technicals[ticker] = merge_fundamentals(
-            technicals[ticker], fund_data, fh, ticker, ocf_veto_exempt
+            technicals[ticker], fund_data, fh, ticker, ocf_veto_exempt,
+            prev=((prev_data.get("tickers") or {}).get(ticker) or {}).get("technicals"),
         )
         if technicals[ticker] and ticker in asof:
             technicals[ticker]["fund_asof"] = asof[ticker]

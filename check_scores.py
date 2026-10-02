@@ -52,7 +52,7 @@ def replay(tech, ticker, ocf_veto_exempt):
     """
     fund = tech.get("fundamentals") or {}
     history = tech.get("financialHistory")
-    fund_score, _, quality, _ = analyzer.compute_fundamental_score(
+    fund_score, _, quality, _, _ = analyzer.compute_fundamental_score(
         fund,
         tech.get("price"),
         tech.get("target_mean"),
@@ -665,6 +665,35 @@ def verify_ratings():
         ratings.tech_drivers(tech)
         ratings.fund_drivers(fund, tech.get("fund_subscores"), tech.get("quality_score"),
                              tech.get("veto_reason"))
+
+    # 8. merge_fundamentals wires it up: fields stored, last run's labels honoured, blend untouched.
+    fund_data = {"fundamentals": {"sector": "Technology", "trailingPE": 25.0, "priceToSales": 5.0,
+                                  "pegRatio": 1.2, "priceToBook": 4.0, "grossMargins": 0.6,
+                                  "operatingMargins": 0.3, "returnOnEquity": 0.25, "revenueGrowth": 0.2,
+                                  "earningsGrowth": 0.2, "currentYearGrowth": 0.2,
+                                  "operatingCashflow": 1e9, "totalRevenue": 5e9, "totalDebt": 1e8,
+                                  "totalCash": 5e8},
+                 "price_target": {}, "earnings": {}}
+
+    def merged(score, prev=None):
+        t = {"score": score, "price": 100.0, "pos52": 55.0, "slope150": -0.4, "ppo": -0.4,
+             "score_reasons": []}
+        return analyzer.merge_fundamentals(t, fund_data, None, "T", [], prev=prev)
+
+    m = merged(41.0)
+    expect("merge: stores labels, action, drivers, reverses_if and the sub-scores",
+           all(k in m for k in ("fund_label", "tech_label", "action", "drivers", "reverses_if",
+                                "fund_subscores"))
+           and m["action"] == ratings.rate(m["tech_score"], m["fund_score"], None, {})["action"]
+           and m["drivers"]["tech"] == ["52-week range position 55%", "150-day avg falling 0.4%/21d",
+                                        "PPO -0.4%"]
+           and m["fund_subscores"]["profitability"] is not None)
+    expect("merge: with no history a 41 reads Neutral technically", m["tech_label"] == "Neutral")
+    expect("merge: last run's Downtrend holds a 41 (it needs 43 to leave)",
+           merged(41.0, {"fund_label": "Strong", "tech_label": "Downtrend"})["tech_label"] == "Downtrend")
+    expect("merge: the blended score and recommendation are untouched",
+           m["combined_score"] is not None
+           and m["recommendation"] in ("Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"))
 
     if failures:
         print(f"FAIL verify-ratings: {len(failures)} check(s) failed:")
