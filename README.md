@@ -7,7 +7,9 @@ An automated stock market analysis system with a live dashboard and daily Telegr
 ## What It Does
 
 ### Telegram Briefing — Monitor Mode (1x daily via GitHub Actions)
-- **7:30 AM ET** — Pre-market run. This is the only scheduled run.
+- **02:00 UTC** — the only scheduled run, always labelled pre-market. GitHub starts scheduled runs
+  3-7 hours late (11 at worst), so 02:00 UTC still finishes before the US open and scores complete
+  daily candles. The run type comes from the trigger, never from the clock.
 
 This is a silent-by-default **exception monitor**, not a twice-daily restated snapshot. It only
 sends a real message when something actually changed since the last run: a recommendation bucket
@@ -16,6 +18,10 @@ a distribution (heavy selling volume) day, or thematic concentration drifting pa
 threshold. On a quiet day it sends one short "Nothing changed" line instead of restating the whole
 portfolio. **Sunday mornings always send the full per-position briefing** regardless of what
 changed, so you still see the whole book at least once a week.
+
+If Yahoo fundamentals fail for half the tickers or more (an outage, not a company problem), the bot
+keeps each ticker's last good scores for up to 7 days and sends **one line** instead of one alert
+per ticker.
 
 The AI (Gemini) reviews the algorithm's pre-computed decisions and exceptions, adding news context and flagging disagreements.
 
@@ -202,7 +208,7 @@ def analyze(prompt):
 Edit `.github/workflows/market-analysis.yml`:
 ```yaml
 schedule:
-  - cron: "30 11 * * *"  # 7:30 AM ET — the only scheduled run (monitor mode)
+  - cron: "0 2 * * *"  # 02:00 UTC — the only scheduled run (monitor mode); must land before the US open
 ```
 
 ### Change Analysis Style

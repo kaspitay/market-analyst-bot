@@ -369,3 +369,18 @@ cron's stated keep-alive purpose already satisfies itself with one run/day.
 3. **Cap level: 59** (not 60) for gates 2 and 3 — 59 demotes to Hold (real bucket changes: UNH
    70.8 -> 59, BABA 79.9 -> 59); 60 would be a no-op against the existing Buy threshold. Default
    accepted, not re-litigated. Cheap to change later if the first month of alerts argues for it.
+
+## Amendments
+
+**2026-10-02 — run timing and Yahoo outages** (found reading the live bot's Telegram history).
+
+- **Cron moved to `0 2 * * *`.** The 11:30 UTC cron was starting 3-7h late (11h at worst), so the
+  run landed mid-session and scored a partial candle — the exact problem the 18:00 deletion above
+  was meant to remove — and the clock-derived `pre-close` label disabled the Sunday full briefing.
+  The run type now comes from the trigger (`inputs.briefing_type || 'pre-market'`), never the hour.
+- **Trigger 7 (DATA_GAP) refined.** A systemic failure — fundamentals missing for >= 50% of tickers
+  — is one `FUNDAMENTALS_OUTAGE` alert, not one DATA_GAP per ticker. Each failed ticker's last good
+  fundamentals are restored if <= 7 days old (`fund_asof` in the stored technicals); an isolated
+  failure still abstains and fires DATA_GAP exactly as specified above.
+- **Yahoo auth hardened.** A crumb containing whitespace/markup (e.g. "Too Many Requests") is
+  rejected and re-fetched (5s, 15s); crumb-authenticated calls retry (2s, 4s) with `curl -f`.

@@ -67,6 +67,11 @@ THEME_COVERAGE = 0.7    # 8: fraction of a theme's members that must be scored
 EXPO_LIMIT = 25.0       # 9: theme exposure warning level
 EXPO_HYSTERESIS = 2.0   # 9
 
+# --- Yahoo outage handling (2026-10-01: all 56 tickers lost fundamentals at once) ---
+OUTAGE_SHARE = 0.5      # fundamentals missing for this share of tickers = Yahoo is down, not 28 company problems
+FUND_MAX_AGE_DAYS = 7   # last-good fundamentals older than this are not served as current
+PT_KEYS = ("target_high", "target_low", "target_mean", "target_median", "num_analysts")
+
 
 def _bucket_edges(score):
     """[low, high) score range of the recommendation bucket `score` falls in."""
@@ -339,28 +344,63 @@ _yf_cookie_file = None
 _yf_crumb = None
 
 
+def crumb_ok(text):
+    """A crumb is a short opaque token. A throttled Yahoo answers with prose
+    ("Too Many Requests"), JSON or HTML instead; that used to count as `crumb=OK`
+    and went into every URL, curl rejected the URL, the body came back empty, and
+    all 56 tickers failed with `Expecting value: line 1 column 1`."""
+    t = (text or "").strip()
+    return 0 < len(t) <= 64 and not any(c in t for c in ' \t\r\n<>{}"')
+
+
+def fetch_crumb(cookie_file, run=subprocess.run, sleep=time.sleep, tries=3):
+    """Cookie + crumb, retrying a rejected crumb after 5s, 15s. None if Yahoo never gives one."""
+    for i in range(tries):
+        run(["curl", "-s", "-c", cookie_file, "https://fc.yahoo.com/",
+             "-H", "User-Agent: Mozilla/5.0"], capture_output=True, text=True, timeout=15)
+        got = run(["curl", "-s", "-b", cookie_file, "https://query2.finance.yahoo.com/v1/test/getcrumb",
+                   "-H", "User-Agent: Mozilla/5.0"],
+                  capture_output=True, text=True, timeout=15).stdout.strip()
+        if crumb_ok(got):
+            return got
+        print(f"Yahoo Finance auth: rejected crumb {got[:40]!r} (try {i + 1}/{tries})")
+        if i < tries - 1:
+            sleep(5 * 3 ** i)
+    return None
+
+
 def init_yahoo_auth():
     """Get Yahoo Finance cookie + crumb for authenticated endpoints."""
     global _yf_cookie_file, _yf_crumb
     import tempfile
     try:
         _yf_cookie_file = tempfile.mktemp(suffix=".txt")
-        subprocess.run(
-            ["curl", "-s", "-c", _yf_cookie_file, "https://fc.yahoo.com/",
-             "-H", "User-Agent: Mozilla/5.0"],
-            capture_output=True, text=True, timeout=15,
-        )
-        result = subprocess.run(
-            ["curl", "-s", "-b", _yf_cookie_file,
-             "https://query2.finance.yahoo.com/v1/test/getcrumb",
-             "-H", "User-Agent: Mozilla/5.0"],
-            capture_output=True, text=True, timeout=15,
-        )
-        _yf_crumb = result.stdout.strip()
-        print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
+        _yf_crumb = fetch_crumb(_yf_cookie_file)
     except Exception as e:
         print(f"Warning: Yahoo Finance auth failed ({e}), continuing without price targets")
         _yf_crumb = None
+    print(f"Yahoo Finance auth: crumb={'OK' if _yf_crumb else 'FAILED'}")
+
+
+def yahoo_get(url, tries=3, run=subprocess.run, sleep=time.sleep):
+    """GET a cookie+crumb Yahoo endpoint and parse it. `curl -f` turns an HTTP error
+    into a non-zero exit, so an empty body, garbage or a 4xx/5xx is retried (2s, 4s)
+    instead of surfacing as `Expecting value`.
+    ponytail: if the endpoint is dead behind a valid crumb this is 3 tries x ~112
+    calls (~11 min worst case); add a circuit breaker if that ever bites."""
+    why = ""
+    for i in range(tries):
+        try:
+            r = run(["curl", "-sf", "-b", _yf_cookie_file, url, "-H", "User-Agent: Mozilla/5.0"],
+                    capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return json.loads(r.stdout)
+            why = f"curl exit {r.returncode}"
+        except (subprocess.TimeoutExpired, ValueError) as e:
+            why = type(e).__name__
+        if i < tries - 1:
+            sleep(2 * 2 ** i)
+    raise RuntimeError(f"no valid JSON from Yahoo after {tries} tries ({why})")
 
 
 def fetch_fundamentals(ticker):
@@ -370,13 +410,8 @@ def fetch_fundamentals(ticker):
         return None
     try:
         modules = "financialData,defaultKeyStatistics,summaryDetail,earningsTrend,summaryProfile,calendarEvents"
-        result = subprocess.run(
-            ["curl", "-s", "-b", _yf_cookie_file,
-             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={modules}&crumb={_yf_crumb}",
-             "-H", "User-Agent: Mozilla/5.0"],
-            capture_output=True, text=True, timeout=15,
-        )
-        data = json.loads(result.stdout)
+        data = yahoo_get(f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+                         f"?modules={modules}&crumb={_yf_crumb}")
         q = data["quoteSummary"]["result"][0]
         fd = q.get("financialData", {})
         dks = q.get("defaultKeyStatistics", {})
@@ -493,11 +528,7 @@ def fetch_financial_history(ticker):
             f"https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{ticker}"
             f"?type={types}&period1={period1}&period2={now}&padTimeSeries=true&crumb={_yf_crumb}"
         )
-        result = subprocess.run(
-            ["curl", "-s", "-b", _yf_cookie_file, url, "-H", "User-Agent: Mozilla/5.0"],
-            capture_output=True, text=True, timeout=15,
-        )
-        data = json.loads(result.stdout)
+        data = yahoo_get(url)
         series_list = data.get("timeseries", {}).get("result", [])
 
         # Build a dict of {type_name: {date: value}}
@@ -820,6 +851,33 @@ def merge_fundamentals(technicals, fund_data, financial_history=None, ticker=Non
     return technicals
 
 
+def apply_outage_fallback(raw, prev_tickers, today, prev_updated):
+    """Systemic Yahoo failure (>= OUTAGE_SHARE of tickers without fundamentals): put each
+    failed ticker's last good fundamentals back, if recent. An isolated failure is left
+    alone so DATA_GAP still reports it. `raw` is {ticker: (fund_data, financial_history)}.
+    Returns (raw, asof, outage): `asof` is when each ticker's fundamentals were fetched
+    (stored as `fund_asof`, so staleness is bounded across consecutive outages), and
+    `outage` is None unless systemic, else {failed, total, restored}."""
+    failed = [t for t, (fund, _) in raw.items() if not fund]
+    asof = {t: today.isoformat() for t, (fund, _) in raw.items() if fund}
+    if not raw or len(failed) < OUTAGE_SHARE * len(raw):
+        return raw, asof, None
+    raw, restored = dict(raw), 0
+    for t in failed:
+        old = (prev_tickers.get(t) or {}).get("technicals") or {}
+        when = old.get("fund_asof") or prev_updated   # pre-fund_asof files: the file's own date
+        if (not old.get("fundamentals") or not when
+                or (today - date.fromisoformat(when)).days > FUND_MAX_AGE_DAYS):
+            continue
+        raw[t] = ({"fundamentals": old["fundamentals"],
+                   "price_target": {k: old.get(k) for k in PT_KEYS},
+                   "earnings": old.get("next_earnings") or {}},
+                  old.get("financialHistory"))
+        asof[t] = when
+        restored += 1
+    return raw, asof, {"failed": len(failed), "total": len(raw), "restored": restored}
+
+
 def compute_weights(portfolio, technicals):
     """Live allocation % from share counts and current prices - no new API calls,
     price is already fetched into technicals[ticker]['price']."""
@@ -1001,6 +1059,24 @@ def quiet_line(portfolio, expo, earnings):
     else:
         earn_str = " No earnings in the next 14 days."
     return f"Nothing changed. {len(portfolio)} positions,{theme_str}{earn_str}"
+
+
+def collapse_outage(alerts, outage):
+    """A systemic failure is one event, not N DATA_GAPs."""
+    if not outage:
+        return alerts
+    kept = (f"kept last scores for {outage['restored']}" if outage["restored"]
+            else "no recent data to fall back on")
+    one = {"ticker": "YAHOO", "trigger": "FUNDAMENTALS_OUTAGE",
+           "detail": f"fundamentals unavailable for {outage['failed']}/{outage['total']} tickers, {kept}"}
+    # A replayed FUNDAMENTALS_OUTAGE (alerts_pending after a failed send) is replaced too.
+    return [one] + [a for a in alerts if a["trigger"] not in ("DATA_GAP", "FUNDAMENTALS_OUTAGE")]
+
+
+def outage_line(alert):
+    """The whole Telegram message for an outage-only run. Built here, not by the model:
+    a model rewrote 56 exceptions as 55 lines and 27 positions as 58."""
+    return f"<b>⚠️ DATA SOURCE</b> {alert['detail']}."
 
 
 def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo, alerts=(), full=False):
@@ -1483,16 +1559,26 @@ def main():
 
     # Fetch technical indicators and price targets for all tickers
     print("Fetching technical indicators and price targets...")
-    technicals = {}
+    technicals, raw = {}, {}
     for ticker in all_tickers:
         technicals[ticker] = fetch_technicals(ticker)
         time.sleep(0.2)
-        fund_data = fetch_fundamentals(ticker)
-        fh = fetch_financial_history(ticker)
+        raw[ticker] = (fetch_fundamentals(ticker), fetch_financial_history(ticker))
+        time.sleep(0.2)  # Rate limit Yahoo Finance
+    # Merge only after the whole fetch: a systemic Yahoo failure is only visible across
+    # tickers, and merge_fundamentals is not safe to call twice on one dict.
+    raw, asof, outage = apply_outage_fallback(
+        raw, prev_data.get("tickers") or {}, date.today(), (prev_data.get("updated") or "")[:10])
+    if outage:
+        print(f"Yahoo outage: {outage['failed']}/{outage['total']} tickers without fundamentals, "
+              f"restored {outage['restored']} from the last good run")
+    for ticker in all_tickers:
+        fund_data, fh = raw[ticker]
         technicals[ticker] = merge_fundamentals(
             technicals[ticker], fund_data, fh, ticker, ocf_veto_exempt
         )
-        time.sleep(0.2)  # Rate limit Yahoo Finance
+        if technicals[ticker] and ticker in asof:
+            technicals[ticker]["fund_asof"] = asof[ticker]
 
     # Live allocation % from share counts x current price (replaces static config percentages)
     weights = compute_weights(portfolio, technicals)
@@ -1551,6 +1637,7 @@ def main():
     # What changed since the last run — computed against prev_data, which was read
     # before this run touched anything, and *before* the save below advances it.
     alerts, monitor = compute_exceptions(prev_data, technicals, weights, themes, expo, today)
+    alerts = collapse_outage(alerts, outage)
     for a in alerts:
         print(f"EXCEPTION {a['ticker']} [{a['trigger']}]: {a['detail']}")
     print(f"Exceptions this run: {len(alerts)}")
@@ -1567,7 +1654,9 @@ def main():
     # already dead for 30 days without anyone noticing.
     full = briefing_type == "pre-market" and today.weekday() == 6
 
-    if alerts or full:
+    if [a["trigger"] for a in alerts] == ["FUNDAMENTALS_OUTAGE"] and not full:
+        analysis = outage_line(alerts[0])
+    elif alerts or full:
         prompt = build_prompt(
             portfolio_news, watchlist_news, market_news,
             indicators, earnings, portfolio, watchlist, technicals, briefing_type,
