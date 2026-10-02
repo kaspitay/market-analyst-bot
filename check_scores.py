@@ -10,6 +10,7 @@ should produce an *intentional* diff here; anything else is a regression.
     python3 check_scores.py --verify-monitor  # regression-checks compute_exceptions
     python3 check_scores.py --verify-workflow # run label + schedule (no clock-derived type)
     python3 check_scores.py --verify-outage   # Yahoo crumb/retry/last-good-data/one-alert
+    python3 check_scores.py --verify-ratings  # labels, grid, veto override, driver lines
 
 The recommendation-flip count is the number that matters: a 3-point score drift
 is noise, a Buy -> Sell flip on an 18% position is not.
@@ -31,6 +32,7 @@ sys.modules.setdefault("requests", types.ModuleType("requests"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import analyzer  # noqa: E402
+import ratings  # noqa: E402
 
 DATA = os.path.join(HERE, "docs", "data", "market-data.json")
 TOL = 0.05  # stored scores are rounded to 1dp
@@ -556,6 +558,124 @@ def verify_outage():
     return 0
 
 
+def verify_ratings():
+    """ratings.py: sticky 3-point labels, the veto override, the nine-cell table, and the
+    lines that explain a rating. Pure arithmetic over dicts, so no network and no fixtures."""
+    failures = []
+
+    def expect(label, cond):
+        if not cond:
+            failures.append(label)
+
+    def rate(tech, fund, prev=None, cap=None):
+        return ratings.rate(tech, fund, cap, prev or {})
+
+    strong_up = {"fund_label": "Strong", "tech_label": "Uptrend"}
+    neutral = {"fund_label": "Neutral", "tech_label": "Neutral"}
+    weak_down = {"fund_label": "Weak", "tech_label": "Downtrend"}
+
+    # 1. The nine cells with no history: plain 40/60 edges.
+    level = {"Weak": 20, "Neutral": 50, "Strong": 80}
+    trend = {"Downtrend": 20, "Neutral": 50, "Uptrend": 80}
+    cells = {("Strong", "Uptrend"): "Buy", ("Strong", "Neutral"): "Accumulate",
+             ("Strong", "Downtrend"): "Starter", ("Neutral", "Uptrend"): "Hold",
+             ("Neutral", "Neutral"): "Hold", ("Neutral", "Downtrend"): "Don't add",
+             ("Weak", "Uptrend"): "Momentum only", ("Weak", "Neutral"): "Avoid",
+             ("Weak", "Downtrend"): "Sell"}
+    for (f, t), tag in cells.items():
+        got = rate(trend[t], level[f])
+        expect(f"{f}/{t} must read {tag}; got {got}",
+               got == {"fund_label": f, "tech_label": t, "action": tag})
+    expect("with no history exactly 60 is Strong, exactly 40 is Neutral, 39.9 is Weak",
+           rate(60, 60)["fund_label"] == "Strong" and rate(40, 40)["tech_label"] == "Neutral"
+           and rate(39.9, 39.9)["fund_label"] == "Weak")
+
+    # 2. Labels are sticky: each edge needs the 3-point band, in both directions.
+    expect("Neutral stays Neutral at 62.9", rate(62.9, 62.9, neutral)["fund_label"] == "Neutral")
+    expect("Neutral becomes Strong at 63", rate(63, 63, neutral)["fund_label"] == "Strong")
+    expect("Strong stays Strong at 57", rate(57, 57, strong_up)["fund_label"] == "Strong")
+    expect("Strong becomes Neutral at 56.9", rate(56.9, 56.9, strong_up)["fund_label"] == "Neutral")
+    expect("Neutral stays Neutral at 37", rate(37, 37, neutral)["tech_label"] == "Neutral")
+    below = rate(36.9, 36.9, neutral)
+    expect("Neutral becomes Weak / Downtrend below 37",
+           below["fund_label"] == "Weak" and below["tech_label"] == "Downtrend")
+    expect("Weak stays Weak at 42.9", rate(42.9, 42.9, weak_down)["fund_label"] == "Weak")
+    expect("Weak becomes Neutral at 43", rate(43, 43, weak_down)["fund_label"] == "Neutral")
+    expect("Strong can fall straight to Weak", rate(30, 30, strong_up)["action"] == "Sell")
+    expect("Weak can jump straight to Strong", rate(70, 70, weak_down)["action"] == "Buy")
+
+    # 3. A veto cap bypasses the band (59 is above the 57 exit, so without this a
+    #    name already Strong would stay Strong under a Hold-ceiling gate).
+    expect("cap 59 pulls a Strong name to Neutral",
+           rate(80, 59, strong_up, cap=59)["fund_label"] == "Neutral")
+    expect("cap 39 pulls a Neutral name to Weak",
+           rate(80, 39, neutral, cap=39)["fund_label"] == "Weak")
+    expect("a cap above the label changes nothing", rate(80, 30, None, cap=59)["fund_label"] == "Weak")
+    expect("a cap leaves the technical label alone",
+           rate(80, 59, strong_up, cap=59)["tech_label"] == "Uptrend")
+
+    # 4. A missing score abstains instead of reading as neutral.
+    expect("no fundamentals -> No Data, technical label kept",
+           rate(70, None) == {"fund_label": None, "tech_label": "Uptrend", "action": "No Data"})
+    expect("no technicals -> No Data",
+           rate(None, 70) == {"fund_label": "Strong", "tech_label": None, "action": "No Data"})
+    expect("neither score -> No Data", rate(None, None)["action"] == "No Data")
+
+    # 5. reverses_if names the nearest edge that changes the tag.
+    def why(tech, fund, prev=None, cap=None):
+        return ratings.reverses_if(tech, fund, rate(tech, fund, prev, cap), cap)
+    expect("Accumulate: technical back to 63 gives Buy",
+           why(52, 70, strong_up) == "technical score 63 or above (now 52) -> Buy")
+    expect("Sell: technical back to 43 gives Avoid (a tie goes to the technical axis)",
+           why(30, 30) == "technical score 43 or above (now 30) -> Avoid")
+    expect("Hold skips edges that would keep the same tag",
+           why(50, 50) == "technical score below 37 (now 50) -> Don't add")
+    expect("a veto removes the fundamental axis", why(70, 59, cap=59) is None)
+    expect("No Data has nothing to reverse", why(70, None) is None)
+
+    # 6. Drivers cite raw fields and drop what is missing.
+    expect("tech drivers cite the three score terms",
+           ratings.tech_drivers({"pos52": 55.0, "slope150": -0.4, "ppo": -0.4})
+           == ["52-week range position 55%", "150-day avg falling 0.4%/21d", "PPO -0.4%"])
+    expect("tech drivers skip missing terms", ratings.tech_drivers({"ppo": 1.26}) == ["PPO +1.3%"])
+    sub = {"valuation": 40, "profitability": 80, "growth": 55, "health": 100, "health_known": 8}
+    fund = {"grossMargins": 0.61, "operatingMargins": 0.38, "returnOnEquity": 0.24, "trailingPE": 31.2}
+    expect("fund drivers: the three sub-scores furthest from 50, each citing its inputs",
+           ratings.fund_drivers(fund, sub, 8, None)
+           == ["health strong (8/8)", "profitability strong (margins 61%/38%, ROE 24%)",
+               "valuation mixed (P/E 31.2)"])
+    expect("a firing gate comes first and counts toward the limit of 3",
+           ratings.fund_drivers({}, {"valuation": 10, "growth": 50}, None, "cash_burn")
+           == ["cash-burn gate", "valuation weak", "growth mixed"])
+
+    # 7. Every stored ticker rates without raising, and abstains only where a score is missing.
+    tickers = json.load(open(DATA))["tickers"]
+    exempt = analyzer.load_config().get("ocf_veto_exempt", [])
+    rated = abstained = 0
+    for tkr, v in tickers.items():
+        tech = (v or {}).get("technicals") or {}
+        fund = tech.get("fundamentals") or {}
+        _, cap = analyzer.veto_gates(fund, tech.get("financialHistory"), tkr, exempt)
+        got = ratings.rate(tech.get("tech_score"), tech.get("fund_score"), cap, {})
+        lacks = tech.get("tech_score") is None or tech.get("fund_score") is None
+        abstained += lacks
+        rated += not lacks
+        expect(f"{tkr}: action is No Data exactly when a score is missing; got {got}",
+               (got["action"] == "No Data") == lacks)
+        ratings.tech_drivers(tech)
+        ratings.fund_drivers(fund, tech.get("fund_subscores"), tech.get("quality_score"),
+                             tech.get("veto_reason"))
+
+    if failures:
+        print(f"FAIL verify-ratings: {len(failures)} check(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(f"verify-ratings PASS: nine cells, sticky 3-point labels, veto override, driver lines; "
+          f"{rated} stored tickers rated, {abstained} abstained.")
+    return 0
+
+
 if __name__ == "__main__":
     if "--verify-outage" in sys.argv:
         sys.exit(verify_outage())
@@ -563,6 +683,8 @@ if __name__ == "__main__":
         sys.exit(verify_workflow())
     if "--self-test" in sys.argv:
         sys.exit(self_test())
+    if "--verify-ratings" in sys.argv:
+        sys.exit(verify_ratings())
     if "--verify-monitor" in sys.argv:
         sys.exit(verify_monitor())
     changed, flips, _ = check()
