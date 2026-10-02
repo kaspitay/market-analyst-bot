@@ -468,7 +468,7 @@ function actionTag(t) {
   const cls = { 'Buy': 'rec-strong-buy', 'Accumulate': 'rec-buy', 'Starter': 'rec-buy', 'Hold': 'rec-hold',
     'Momentum only': 'rec-hold', "Don't add": 'rec-sell', 'Avoid': 'rec-sell', 'Sell': 'rec-strong-sell' }[t.action] || 'rec-hold';
   const chips = [t.fund_label && `Fund ${t.fund_label}`, t.tech_label && `Tech ${t.tech_label}`].filter(Boolean).join(' · ');
-  return `<span class="rec-tag ${cls}">${t.action}</span>${chips ? `<div class="chips">${chips}</div>` : ''}`;
+  return `<span class="rec-tag ${cls}"${t.action_gloss ? ` title="${t.action_gloss}"` : ''}>${t.action}</span>${chips ? `<div class="chips">${chips}</div>` : ''}`;
 }
 
 function rsiColor(rsi) {
@@ -570,6 +570,7 @@ function renderTickers() {
     const combSc = t.combined_score ?? t.score ?? 0;
     const dr = t.drivers || {};
     const explain = t.action ? `<div class="explain">
+        ${t.action_gloss ? `<div><b>${t.action}:</b> ${t.action_gloss}</div>` : ''}
         <div><b>Fundamentals ${t.fund_label ?? '—'}:</b> ${(dr.fund || []).join(', ') || '—'}</div>
         <div><b>Technical ${t.tech_label ?? '—'}:</b> ${(dr.tech || []).join(', ') || '—'}</div>
         ${t.reverses_if ? `<div><b>Reverses if:</b> ${t.reverses_if}</div>` : ''}

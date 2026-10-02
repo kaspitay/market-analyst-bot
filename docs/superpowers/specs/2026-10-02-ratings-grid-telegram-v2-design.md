@@ -85,7 +85,7 @@ the one nearest the current score, the tag it lands on, and today's value. Examp
 ## Data shape (`market-data.json`, per ticker `technicals`)
 
 Added: `fund_label`, `tech_label`, `action`, `drivers` (`{fund: [...], tech: [...]}`), `reverses_if`,
-`slope150`, `fund_subscores`. `slope150` is currently only inside a reason string; it is stored so the
+`slope150`, `fund_subscores`, `action_gloss` (the tag's one-phrase gloss from `ratings.gloss`, or null). `slope150` is currently only inside a reason string; it is stored so the
 template cites a number. `compute_fundamental_score` also returns its four sub-scores as a dict (stored as
 `fund_subscores`, plus `health_known`, the number of measurable F-score signals); its two callers
 (`merge_fundamentals`, `check_scores.replay`) are updated. Nothing is removed.
@@ -110,7 +110,7 @@ replaced.
 
 Action change:
 ```
-NBIS  Buy -> Accumulate  (18.1% of book)
+NBIS  Buy -> Accumulate (scale in)  (18.1% of book)
 why: technical Uptrend -> Neutral: 52-week range position 55%, 150-day avg falling 0.4%/21d, PPO -0.4%; fundamentals Strong: health strong (8/8), profitability strong (margins 61%/38%, ROE 24%), valuation mixed (P/E 31.2)
 reverses if: technical score 63 or above (now 52) -> Buy
 ```

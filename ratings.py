@@ -16,6 +16,10 @@ ACTIONS = {
     (0, 2): "Momentum only", (0, 1): "Avoid", (0, 0): "Sell",
 }
 ACTION_ORDER = ["Buy", "Accumulate", "Starter", "Hold", "Momentum only", "Don't add", "Avoid", "Sell", "No Data"]
+# One-phrase gloss per tag (spec: "Detail line per tag"). Hold is glossed only in its
+# Neutral/Uptrend cell; Avoid and Sell carry none.
+GLOSS = {"Buy": "add", "Accumulate": "scale in", "Starter": "small, wait for trend repair",
+         "Don't add": "consider trimming", "Momentum only": "tight stop"}
 VETO_TEXT = {"cash_burn": "cash-burn gate", "leverage": "leverage gate", "margin_erosion": "margin-erosion gate"}
 
 
@@ -53,6 +57,13 @@ def rate(tech_score, fund_score, veto_cap, prev):
         "tech_label": None if t is None else TECH_LABELS[t],
         "action": "No Data" if f is None or t is None else ACTIONS[(f, t)],
     }
+
+
+def gloss(action, tech_label):
+    """The one-phrase gloss for an action tag, or None."""
+    if action == "Hold":
+        return "trend intact" if tech_label == "Uptrend" else None
+    return GLOSS.get(action)
 
 
 def tech_drivers(t):

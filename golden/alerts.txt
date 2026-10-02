@@ -1,6 +1,6 @@
 <b>MONITOR</b> 2026-10-04  4 updates
 
-NBIS  Buy -> Accumulate  (18.1% of book)
+NBIS  Buy -> Accumulate (scale in)  (18.1% of book)
 why: technical Uptrend -> Neutral: 52-week range position 55%, 150-day avg falling 0.4%/21d, PPO -0.4%; fundamentals Strong: health strong (8/8), profitability strong (margins 61%/38%, ROE 24%), valuation mixed (P/E 31.2)
 reverses if: technical score 63 or above (now 52) -> Buy
 
