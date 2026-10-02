@@ -1,0 +1,31 @@
+<b>WEEKLY BOOK</b> 2026-10-04
+
+<b>CHANGES</b>
+NBIS  Buy -> Accumulate  (18.1% of book)
+why: technical Uptrend -> Neutral: 52-week range position 55%, 150-day avg falling 0.4%/21d, PPO -0.4%; fundamentals Strong: health strong (8/8), profitability strong (margins 61%/38%, ROE 24%), valuation mixed (P/E 31.2)
+reverses if: technical score 63 or above (now 52) -> Buy
+
+<b>PORTFOLIO (4)</b>
+Buy (1): MSFT 4.0%
+Accumulate (1): NBIS 18.1%
+Hold (1): KO 1.0%
+Sell (1): IREN 10.0%
+
+<b>WATCHLIST (5)</b>
+Buy (2): ANET, PLTR
+Accumulate (1): INTU
+Hold (1): BABA
+No Data (1): OKLO
+
+<b>MARKET</b>
+S&P 500 7,742 (+0.99%) | NASDAQ 27,310 (+1.63%) | VIX 15.7 | Fear & Greed 32
+
+<b>EARNINGS (14d)</b>
+UNH 10-13, ASML 10-14
+
+<b>CALENDAR</b>
+10-14 CPI (Inflation) Report
+10-27 Fed Meeting No. 7 (Day 1)
+
+<b>THEMES</b>
+ai-datacenter 28.1% (over limit), megacap-platform 4.0%

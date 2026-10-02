@@ -62,6 +62,9 @@
     .rec-hold { background: #ffd60022; color: #ffd600; border: 1px solid #ffd60044; }
     .rec-sell { background: #ff174422; color: #ff8a80; border: 1px solid #ff8a8044; }
     .rec-strong-sell { background: #ff174433; color: #ff1744; border: 1px solid #ff174466; }
+    .chips { font-size: 10px; color: #888; margin-top: 3px; white-space: nowrap; }
+    .explain { font-size: 12px; color: #bbb; line-height: 1.6; margin: 6px 0 10px; }
+    .explain b { color: #fff; }
     .news-item { padding: 6px 0; border-bottom: 1px solid #1f1f3a; font-size: 12px; }
     .news-item:last-child { border: none; }
     .earnings-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; background: #e9456022; color: #e94560; border: 1px solid #e9456044; margin-left: 8px; }
@@ -208,8 +211,11 @@
         <dt>Fundamental Score (0-100)</dt>
         <dd>Sector-relative valuation (P/E &amp; P/S vs sector median, 20%), Profitability/margins/ROE (25%), Growth/revenue+earnings (20%), Financial Health (Piotroski-style 0-8 F-score, 35% — renormalized across the other legs when health can't be measured). The analyst price target is <b>display-only</b>, not part of this score. Hard veto gates can cap the score regardless of the weights above: 39 for cash burn, 59 for leverage or margin erosion.</dd>
 
-        <dt>Combined Score &amp; Recommendation</dt>
-        <dd>Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b>. Ranges: <b>Strong Buy</b> (72+), <b>Buy</b> (60-71), <b>Hold</b> (40-59), <b>Sell</b> (28-39), <b>Strong Sell</b> (&lt;28). Not financial advice.</dd>
+        <dt>Action (Ratings Grid)</dt>
+        <dd>Fundamentals and technicals are rated <b>separately</b> &mdash; Fundamentals <b>Strong / Neutral / Weak</b> (score 60+ / 40-59 / under 40) and Technicals <b>Uptrend / Neutral / Downtrend</b> &mdash; then combined into one action: <b>Buy</b>, <b>Accumulate</b>, <b>Starter</b>, <b>Hold</b>, <b>Momentum only</b>, <b>Don't add</b>, <b>Avoid</b> or <b>Sell</b>. A label only moves once its score clears the edge by 3 points, and a veto gate pulls fundamentals down at once. Click a row for the drivers and what would change the action.</dd>
+
+        <dt>Blended Score</dt>
+        <dd>Shown as <b>Blend</b> in the detail panel; the action above is what the dashboard and Telegram use. Weighted blend: <b>Technical 40%</b> + <b>Fundamental 60%</b>. Ranges: <b>Strong Buy</b> (72+), <b>Buy</b> (60-71), <b>Hold</b> (40-59), <b>Sell</b> (28-39), <b>Strong Sell</b> (&lt;28). Not financial advice.</dd>
 
         <dt>Intrinsic Value Calculator</dt>
         <dd>Uses 4 proven valuation methods to estimate fair value, averaged with Margin of Safety.</dd>
@@ -275,7 +281,7 @@
             <th onclick="sortTable(5)">RSI <span class="help" title="Relative Strength Index (14-day). Below 30=oversold, above 70=overbought">?</span></th>
             <th onclick="sortTable(6)">SMA50 <span class="help" title="50-day Simple Moving Average — short-term trend">?</span></th>
             <th onclick="sortTable(7)">SMA200 <span class="help" title="200-day Simple Moving Average — long-term trend">?</span></th>
-            <th onclick="sortTable(8)">Action <span class="help" title="Algorithm-based recommendation from technical indicators">?</span></th>
+            <th onclick="sortTable(8)">Action <span class="help" title="Fundamentals and technicals are rated separately, then combined into one action. Click a row for the reasons.">?</span></th>
             <th>Signals</th>
           </tr>
         </thead>
@@ -448,6 +454,23 @@ function recTag(rec) {
   return `<span class="rec-tag ${cls}">${rec}</span>`;
 }
 
+const ACTION_RANK = ['Buy', 'Accumulate', 'Starter', 'Hold', 'Momentum only', "Don't add", 'Avoid', 'Sell'];
+
+// Higher is better, like the score this replaces as the sort key. Data written before
+// the grid existed has no action; those rows sort by their blended score as before.
+function actionScore(t) {
+  const i = ACTION_RANK.indexOf(t.action);
+  return i < 0 ? -1 : ACTION_RANK.length - i;
+}
+
+function actionTag(t) {
+  if (!t.action) return recTag(t.recommendation) + scoreBar(t.combined_score ?? t.score);
+  const cls = { 'Buy': 'rec-strong-buy', 'Accumulate': 'rec-buy', 'Starter': 'rec-buy', 'Hold': 'rec-hold',
+    'Momentum only': 'rec-hold', "Don't add": 'rec-sell', 'Avoid': 'rec-sell', 'Sell': 'rec-strong-sell' }[t.action] || 'rec-hold';
+  const chips = [t.fund_label && `Fund ${t.fund_label}`, t.tech_label && `Tech ${t.tech_label}`].filter(Boolean).join(' · ');
+  return `<span class="rec-tag ${cls}">${t.action}</span>${chips ? `<div class="chips">${chips}</div>` : ''}`;
+}
+
 function rsiColor(rsi) {
   if (!rsi) return 'neutral';
   if (rsi > 70) return 'red';
@@ -499,7 +522,7 @@ function renderTickers() {
       case 5: va = ta.rsi || 0; vb = tb.rsi || 0; break;
       case 6: va = ta.sma50 || 0; vb = tb.sma50 || 0; break;
       case 7: va = ta.sma200 || 0; vb = tb.sma200 || 0; break;
-      case 8: va = ta.combined_score || ta.score || 0; vb = tb.combined_score || tb.score || 0; break;
+      case 8: va = actionScore(ta) * 1000 + (ta.combined_score ?? ta.score ?? 0); vb = actionScore(tb) * 1000 + (tb.combined_score ?? tb.score ?? 0); break;
       default: va = a.allocation || 0; vb = b.allocation || 0;
     }
     if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -526,7 +549,7 @@ function renderTickers() {
       <td>${rsiBadge(t.rsi)}</td>
       <td>${sma50}</td>
       <td>${sma200}</td>
-      <td>${recTag(t.recommendation)}${scoreBar(t.combined_score ?? t.score)}</td>
+      <td>${actionTag(t)}</td>
       <td>${signals}</td>
     </tr>`;
 
@@ -545,6 +568,12 @@ function renderTickers() {
     const techSc = t.tech_score ?? t.score ?? 0;
     const fundSc = t.fund_score ?? 0;
     const combSc = t.combined_score ?? t.score ?? 0;
+    const dr = t.drivers || {};
+    const explain = t.action ? `<div class="explain">
+        <div><b>Fundamentals ${t.fund_label ?? '—'}:</b> ${(dr.fund || []).join(', ') || '—'}</div>
+        <div><b>Technical ${t.tech_label ?? '—'}:</b> ${(dr.tech || []).join(', ') || '—'}</div>
+        ${t.reverses_if ? `<div><b>Reverses if:</b> ${t.reverses_if}</div>` : ''}
+      </div>` : '';
 
     html += `<tr class="detail-row" id="detail-${e.ticker}"><td colspan="10">
       <div class="detail-wrapper" style="padding:0 16px">
@@ -560,8 +589,10 @@ function renderTickers() {
       <div class="scores-row">
         <span class="score-item">Technical: <b>${techSc}</b>/100 ${scoreBar(techSc)}</span>
         <span class="score-item">Fundamental: <b>${fundSc}</b>/100 ${scoreBar(fundSc)}</span>
-        <span class="score-item" style="font-size:13px">Combined: <b style="color:${scoreColor(combSc)}">${combSc}</b>/100 ${recTag(t.recommendation)}</span>
+        <span class="score-item" style="font-size:13px">Action: ${actionTag(t)}</span>
+        <span class="score-item">Blend: <b style="color:${scoreColor(combSc)}">${combSc}</b>/100</span>
       </div>
+      ${explain}
       <!-- TAB: CHART & INDICATORS -->
       <div id="dtab-chart-${e.ticker}" class="dtab active">
       <div class="detail-content">

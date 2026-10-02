@@ -10,6 +10,9 @@ should produce an *intentional* diff here; anything else is a regression.
     python3 check_scores.py --verify-monitor  # regression-checks compute_exceptions
     python3 check_scores.py --verify-workflow # run label + schedule (no clock-derived type)
     python3 check_scores.py --verify-outage   # Yahoo crumb/retry/last-good-data/one-alert
+    python3 check_scores.py --verify-ratings  # labels, grid, veto override, driver lines
+    python3 check_scores.py --verify-messages # golden alert/digest text, digest length
+    python3 check_scores.py --update-golden   # rewrite golden/*.txt (read the diff first)
 
 The recommendation-flip count is the number that matters: a 3-point score drift
 is noise, a Buy -> Sell flip on an 18% position is not.
@@ -31,6 +34,8 @@ sys.modules.setdefault("requests", types.ModuleType("requests"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import analyzer  # noqa: E402
+import ratings  # noqa: E402
+import messages  # noqa: E402
 
 DATA = os.path.join(HERE, "docs", "data", "market-data.json")
 TOL = 0.05  # stored scores are rounded to 1dp
@@ -50,7 +55,7 @@ def replay(tech, ticker, ocf_veto_exempt):
     """
     fund = tech.get("fundamentals") or {}
     history = tech.get("financialHistory")
-    fund_score, _, quality, _ = analyzer.compute_fundamental_score(
+    fund_score, _, quality, _, _ = analyzer.compute_fundamental_score(
         fund,
         tech.get("price"),
         tech.get("target_mean"),
@@ -214,13 +219,46 @@ def verify_monitor():
                                                  {"T": weight}, {}, {}, T0)
         return {a["trigger"] for a in alerts if a["ticker"] == "T"}
 
-    # 1. REC_FLIP — bucket flip beyond REC_HYSTERESIS combined points.
-    lo, hi = analyzer._bucket_edges(55.0)
-    c1 = hi + analyzer.REC_HYSTERESIS + 0.1
-    expect("REC_FLIP edge: bucket flip beyond hysteresis must fire",
-           "REC_FLIP" in run({"combined_score": 55.0}, {"combined_score": c1}))
-    expect("REC_FLIP level: unchanged score must not fire",
-           "REC_FLIP" not in run({"combined_score": c1}, {"combined_score": c1}))
+    # 1. ACTION_CHANGE — the action tag changed. The labels are damped upstream
+    #    (ratings.rate), so there is no band here.
+    expect("ACTION_CHANGE edge: a tag change must fire",
+           "ACTION_CHANGE" in run({"action": "Buy"}, {"action": "Accumulate"}))
+    expect("ACTION_CHANGE level: the same tag must not fire",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "Buy"}))
+    expect("ACTION_CHANGE: Hold in two different cells is silent (same tag)",
+           "ACTION_CHANGE" not in run({"action": "Hold", "tech_label": "Uptrend"},
+                                      {"action": "Hold", "tech_label": "Neutral"}))
+    expect("ACTION_CHANGE: no previous action (first run after the grid ships) baselines silently",
+           "ACTION_CHANGE" not in run({"combined_score": 50}, {"action": "Buy"}))
+    expect("ACTION_CHANGE: to or from No Data is DATA_GAP's job, not this trigger's",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "No Data"})
+           and "ACTION_CHANGE" not in run({"action": "No Data"}, {"action": "Buy"}))
+    expect("ACTION_CHANGE below the weight gate must not fire",
+           "ACTION_CHANGE" not in run({"action": "Buy"}, {"action": "Sell"}, weight=0.5))
+    got, _ = analyzer.compute_exceptions(
+        _prev({"T": {"action": "Buy", "fund_label": "Strong", "tech_label": "Uptrend"}}),
+        {"T": {"action": "Starter", "fund_label": "Strong", "tech_label": "Downtrend"}},
+        {"T": WEIGHT}, {}, {}, T0)
+    carried = next((a for a in got if a["trigger"] == "ACTION_CHANGE"), {})
+    expect(f"ACTION_CHANGE carries what a replayed alert needs; got {carried}",
+           carried.get("from") == "Buy" and carried.get("to") == "Starter"
+           and carried.get("from_fund") == "Strong" and carried.get("from_tech") == "Uptrend"
+           and carried.get("detail") == "Buy -> Starter")
+
+    # 1b. A fundamentals gap must not erase the last real action: the return is compared with it.
+    got, _ = analyzer.compute_exceptions(
+        _prev({"T": {"action": "No Data", "fund_label": None, "tech_label": "Uptrend",
+                     "last_action": "Buy", "last_fund_label": "Strong"}}),
+        {"T": {"action": "Hold", "fund_label": "Neutral", "tech_label": "Uptrend"}},
+        {"T": WEIGHT}, {}, {}, T0)
+    carried = next((a for a in got if a["trigger"] == "ACTION_CHANGE"), {})
+    expect(f"ACTION_CHANGE across a data gap compares with the pre-gap action; got {carried}",
+           carried.get("from") == "Buy" and carried.get("to") == "Hold"
+           and carried.get("from_fund") == "Strong" and carried.get("from_tech") == "Uptrend")
+    expect("ACTION_CHANGE across a data gap: back to the same action is silent",
+           "ACTION_CHANGE" not in run({"action": "No Data", "last_action": "Hold"}, {"action": "Hold"}))
+    expect("ACTION_CHANGE: still in the gap (No Data now) is silent",
+           "ACTION_CHANGE" not in run({"action": "No Data", "last_action": "Buy"}, {"action": "No Data"}))
 
     # 2. MA_CROSS — SMA50/SMA200 sign flip.
     expect("MA_CROSS edge: sign flip must fire",
@@ -337,6 +375,10 @@ def verify_workflow():
     if "date -u +%H" in text:
         failures.append("run type is derived from the clock (`date -u +%H`); "
                         "scheduled runs start hours late, so the label is wrong")
+
+    if "GEMINI" in text:
+        failures.append("the workflow still passes GEMINI_API_KEY; the Telegram text is built "
+                        "from templates and no step calls a model")
 
     m = re.search(r'cron:\s*"(\d+)\s+(\d+)\s+\*\s+\*\s+\*"', text)
     if not m:
@@ -556,6 +598,361 @@ def verify_outage():
     return 0
 
 
+GOLDEN = os.path.join(HERE, "golden")
+
+# Two fundamental profiles for the message fixtures. The numbers are arbitrary but
+# internally consistent: the sub-scores are what compute_fundamental_score would return.
+SOUND = {"fundamentals": {"grossMargins": 0.61, "operatingMargins": 0.38, "returnOnEquity": 0.24,
+                          "revenueGrowth": 0.12, "earningsGrowth": 0.20, "trailingPE": 31.2},
+         "fund_subscores": {"valuation": 40, "profitability": 80, "growth": 55, "health": 100,
+                            "health_known": 8},
+         "quality_score": 8}
+BURNING = {"fundamentals": {"grossMargins": 0.25, "operatingMargins": -0.05, "returnOnEquity": -0.10,
+                            "revenueGrowth": 0.35, "priceToSales": 12.0},
+           "fund_subscores": {"valuation": 20, "profitability": 30, "growth": 60, "health": 25,
+                              "health_known": 8},
+           "quality_score": 2}
+
+
+def _tk(tech, fund, prev, profile, veto=None, cap=None, pos52=55.0, slope150=-0.4, ppo=-0.4):
+    """A ticker's technicals as merge_fundamentals leaves them."""
+    t = {"tech_score": tech, "fund_score": fund, "pos52": pos52, "slope150": slope150, "ppo": ppo,
+         "veto_reason": veto, **profile}
+    labels = ratings.rate(tech, fund, cap, prev)
+    t.update(labels)
+    t["drivers"] = {"tech": ratings.tech_drivers(t),
+                    "fund": ratings.fund_drivers(t["fundamentals"], t["fund_subscores"],
+                                                 t["quality_score"], veto)}
+    t["reverses_if"] = ratings.reverses_if(tech, fund, labels, cap)
+    return t
+
+
+def _with_labels(tech, ticker, exempt):
+    """A stored ticker's technicals plus the labels a run would add (no history)."""
+    tech = dict(tech)
+    _, cap = analyzer.veto_gates(tech.get("fundamentals") or {}, tech.get("financialHistory"),
+                                 ticker, exempt)
+    tech.update(ratings.rate(tech.get("tech_score"), tech.get("fund_score"), cap, {}))
+    return tech
+
+
+def verify_messages(update=False):
+    """messages.py: golden text for the alerts and the Sunday digest, the 4,000-character
+    budget on the real book, and the inputs that must not crash a render.
+
+    `update=True` (--update-golden) rewrites the golden files instead of comparing; read
+    the diff before committing them."""
+    failures = []
+    today = date(2026, 10, 4)
+
+    def expect(label, cond):
+        if not cond:
+            failures.append(label)
+
+    def golden(name, text):
+        path = os.path.join(GOLDEN, name)
+        if update:
+            os.makedirs(GOLDEN, exist_ok=True)
+            open(path, "w").write(text + "\n")
+        elif not os.path.exists(path) or open(path).read() != text + "\n":
+            failures.append(f"golden/{name} differs from the rendered text; read the diff, "
+                            f"then rerun with --update-golden")
+
+    def plain(text):
+        """What is left after the <b> headers: no bare '<' may reach Telegram or innerHTML."""
+        return re.sub(r"</?b>", "", text)
+
+    strong_up = {"fund_label": "Strong", "tech_label": "Uptrend"}
+    neutral = {"fund_label": "Neutral", "tech_label": "Neutral"}
+    T = {"NBIS": _tk(52, 70, strong_up, SOUND),
+         "IREN": _tk(30, 30, neutral, BURNING, "cash_burn", 39, pos52=18.0, slope150=-6.1, ppo=-2.3),
+         "MSFT": _tk(66, 72, {}, SOUND), "KO": _tk(50, 50, {}, SOUND),
+         "INTU": _tk(40, 80, {}, SOUND), "ANET": _tk(80, 80, {}, SOUND),
+         "PLTR": _tk(80, 80, {}, SOUND), "BABA": _tk(50, 50, {}, SOUND),
+         "OKLO": {"tech_score": None, "fund_score": None, **ratings.rate(None, None, None, {})}}
+    W = {"NBIS": 18.1, "IREN": 10.0, "MSFT": 4.0, "KO": 1.0}
+    alerts = [
+        {"ticker": "NBIS", "trigger": "ACTION_CHANGE", "detail": "Buy -> Accumulate",
+         "from": "Buy", "to": "Accumulate", "from_fund": "Strong", "from_tech": "Uptrend"},
+        {"ticker": "IREN", "trigger": "ACTION_CHANGE", "detail": "Hold -> Sell",
+         "from": "Hold", "to": "Sell", "from_fund": "Neutral", "from_tech": "Neutral"},
+        {"ticker": "IREN", "trigger": "VETO", "detail": "none -> cash_burn"},
+        {"ticker": "NVDA", "trigger": "52W_HIGH", "detail": "$236.79 through prior 52w high $235.74"},
+        {"ticker": "AMD", "trigger": "DATA_GAP", "detail": "scored 61.0 last run, no score this run"},
+        {"ticker": "MU", "trigger": "DATA_GAP", "detail": "scored 55.0 last run, no score this run"},
+    ]
+    ind = {"indices": {"sp500": {"price": 7742.48, "changesPercentage": 0.99172},
+                       "nasdaq": {"price": 27310.45, "changesPercentage": 1.63315}},
+           "vix": {"price": 15.71}, "fear_greed": {"now": 32},
+           "calendar": [{"title": "CPI (Inflation) Report", "date": "2026-10-14"},
+                        {"title": "Fed Meeting No. 7 (Day 1)", "date": "2026-10-27"},
+                        {"title": "already past", "date": "2026-09-01"}]}
+    earn = [{"symbol": "UNH", "date": "2026-10-13"}, {"symbol": "ASML", "date": "2026-10-14"}]
+    expo = {"ai-datacenter": 28.1, "megacap-platform": 4.0, "untagged": 1.0}
+    port = ["NBIS", "IREN", "MSFT", "KO"]
+    wl = ["INTU", "ANET", "PLTR", "BABA", "OKLO"]
+
+    # 1. Golden text.
+    alert_text = messages.alerts_message(alerts, T, W, today)
+    golden("alerts.txt", alert_text)
+    digest_text = messages.sunday_digest(alerts[:1], T, W, port, wl, ind, earn, expo, today, 25.0)
+    golden("sunday.txt", digest_text)
+    for name, text in (("alerts", alert_text), ("digest", digest_text)):
+        expect(f"{name}: no bare '<' after the <b> headers", "<" not in plain(text))
+        expect(f"{name}: not pre-escaped (send_telegram escapes)", "&amp;" not in text)
+
+    # 2. Inputs that must not crash a render: a replayed old-format alert, an ACTION_CHANGE whose
+    #    ticker has no technicals today, and tickers absent from the technicals dict.
+    old = [{"ticker": "X", "trigger": "REC_FLIP", "detail": "Hold -> Buy (combined 55 -> 66)"},
+           {"ticker": "Y", "trigger": "ACTION_CHANGE", "detail": "Buy -> Sell", "from": "Buy", "to": "Sell"}]
+    text = messages.alerts_message(old, {}, {}, today)
+    expect(f"a replayed old alert and a technicals-less ACTION_CHANGE must still render; got {text!r}",
+           "X  REC_FLIP: Hold -> Buy (combined 55 -> 66)" in text and "Y  Buy -> Sell" in text)
+    text = messages.sunday_digest([], {}, {}, ["AAA"], ["BBB"], {}, [], {}, today, 25.0)
+    expect(f"tickers with no technicals must land under No Data; got {text!r}",
+           "No Data (1): AAA" in text and "No Data (1): BBB" in text)
+
+    # 3. The real book fits one Telegram message, and lists every portfolio ticker.
+    data = json.load(open(DATA))
+    exempt = analyzer.load_config().get("ocf_veto_exempt", [])
+    real_T = {t: _with_labels((v or {}).get("technicals") or {}, t, exempt)
+              for t, v in data["tickers"].items()}
+    real_W = {t: v["allocation"] for t, v in data["tickers"].items() if v.get("allocation") is not None}
+    real_port = [t for t, v in data["tickers"].items() if v["type"] == "portfolio"]
+    real_wl = [t for t, v in data["tickers"].items() if v["type"] == "watchlist"]
+    real_expo = {n: sum(real_W.get(t, 0) for t in m)
+                 for n, m in analyzer.load_config().get("themes", {}).items()}
+    real = messages.sunday_digest([], real_T, real_W, real_port, real_wl, data["indicators"],
+                                  data["earnings"], real_expo, date.fromisoformat(data["updated"][:10]),
+                                  analyzer.EXPO_LIMIT)
+    expect(f"the real Sunday digest must fit one message (4,000 chars); got {len(real)}", len(real) <= 4000)
+    expect("the real digest lists every portfolio ticker", all(t in real for t in real_port))
+
+    # 4. Over budget the digest sheds sections instead of overflowing.
+    wide = [f"W{i:03d}" for i in range(60)]
+    wide_T = dict(T)
+    wide_T.update({w: {"action": "Buy"} for w in wide})
+    args = ([], wide_T, W, port, wide, ind, earn, expo, today, 25.0)
+    full_len = len(messages.sunday_digest(*args))
+    tight = messages.sunday_digest(*args, budget=full_len - 1)
+    expect(f"over budget: shorter than the full digest and within budget; got {len(tight)} vs {full_len}",
+           len(tight) <= full_len - 1)
+    expect("over budget: the watchlist collapses to counts, the portfolio and changes survive",
+           "Buy 60" in tight and "W059" not in tight and "PORTFOLIO (4)" in tight and "CHANGES" in tight)
+
+    # 5. Which message a run sends. The model is out of the loop entirely.
+    def bt(alerts_, full):
+        return analyzer.briefing_text(alerts_, full, T, W, {"NBIS": {}, "IREN": {}}, ["INTU"],
+                                      ind, earn, expo, today)
+    outage = [{"ticker": "YAHOO", "trigger": "FUNDAMENTALS_OUTAGE",
+               "detail": "fundamentals unavailable for 56/56 tickers, kept last scores for 56"}]
+    expect("outage-only run sends the one-line data-source message",
+           bt(outage, False).startswith("<b>DATA SOURCE</b>") and "\n" not in bt(outage, False))
+    expect("Sunday sends the digest even when only an outage fired",
+           bt(outage, True).startswith("<b>WEEKLY BOOK</b>"))
+    expect("a normal day with alerts sends the monitor message",
+           bt(alerts[:1], False).startswith("<b>MONITOR</b>"))
+    expect("a quiet day sends the quiet line", bt([], False).startswith("Nothing changed."))
+
+    # 6. A busy day must still fit one message. The MONITOR message has a single <b> header, so
+    #    send_telegram cannot split it: a message over the limit is rejected, the send raises,
+    #    alerts_pending is never cleared, and every later run replays the same oversize message.
+    many = {f"S{i:02d}": _tk(52, 70, strong_up, SOUND) for i in range(18)}
+    busy = [{"ticker": k, "trigger": "ACTION_CHANGE", "detail": "Buy -> Accumulate", "from": "Buy",
+             "to": "Accumulate", "from_fund": "Strong", "from_tech": "Uptrend"} for k in many]
+    busy_w = {k: 5.0 for k in many}
+    text = messages.alerts_message(busy, many, busy_w, today)
+    expect(f"a busy day's alert message must fit one Telegram message; got {len(text)}", len(text) <= 4000)
+    expect("a busy day keeps every ticker's head line",
+           all(f"{k}  Buy -> Accumulate" in text for k in many))
+    text = messages.sunday_digest(busy, many, busy_w, list(many), [], ind, earn, expo, today, 25.0)
+    expect(f"a busy Sunday digest must fit one Telegram message; got {len(text)}", len(text) <= 4000)
+    expect("a busy Sunday digest keeps every ticker's head line",
+           all(f"{k}  Buy -> Accumulate" in text for k in many))
+
+    if failures:
+        print(f"FAIL verify-messages: {len(failures)} check(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(f"verify-messages PASS: golden alerts and digest match, real digest is {len(real)} chars "
+          f"for {len(real_port) + len(real_wl)} tickers, over-budget digests shed sections.")
+    return 0
+
+
+def verify_ratings():
+    """ratings.py: sticky 3-point labels, the veto override, the nine-cell table, and the
+    lines that explain a rating. Pure arithmetic over dicts, so no network and no fixtures."""
+    failures = []
+
+    def expect(label, cond):
+        if not cond:
+            failures.append(label)
+
+    def rate(tech, fund, prev=None, cap=None):
+        return ratings.rate(tech, fund, cap, prev or {})
+
+    strong_up = {"fund_label": "Strong", "tech_label": "Uptrend"}
+    neutral = {"fund_label": "Neutral", "tech_label": "Neutral"}
+    weak_down = {"fund_label": "Weak", "tech_label": "Downtrend"}
+
+    # 1. The nine cells with no history: plain 40/60 edges.
+    level = {"Weak": 20, "Neutral": 50, "Strong": 80}
+    trend = {"Downtrend": 20, "Neutral": 50, "Uptrend": 80}
+    cells = {("Strong", "Uptrend"): "Buy", ("Strong", "Neutral"): "Accumulate",
+             ("Strong", "Downtrend"): "Starter", ("Neutral", "Uptrend"): "Hold",
+             ("Neutral", "Neutral"): "Hold", ("Neutral", "Downtrend"): "Don't add",
+             ("Weak", "Uptrend"): "Momentum only", ("Weak", "Neutral"): "Avoid",
+             ("Weak", "Downtrend"): "Sell"}
+    for (f, t), tag in cells.items():
+        got = rate(trend[t], level[f])
+        expect(f"{f}/{t} must read {tag}; got {got}",
+               got == {"fund_label": f, "tech_label": t, "action": tag})
+    expect("with no history exactly 60 is Strong, exactly 40 is Neutral, 39.9 is Weak",
+           rate(60, 60)["fund_label"] == "Strong" and rate(40, 40)["tech_label"] == "Neutral"
+           and rate(39.9, 39.9)["fund_label"] == "Weak")
+
+    # 2. Labels are sticky: each edge needs the 3-point band, in both directions.
+    expect("Neutral stays Neutral at 62.9", rate(62.9, 62.9, neutral)["fund_label"] == "Neutral")
+    expect("Neutral becomes Strong at 63", rate(63, 63, neutral)["fund_label"] == "Strong")
+    expect("Strong stays Strong at 57", rate(57, 57, strong_up)["fund_label"] == "Strong")
+    expect("Strong becomes Neutral at 56.9", rate(56.9, 56.9, strong_up)["fund_label"] == "Neutral")
+    expect("Neutral stays Neutral at 37", rate(37, 37, neutral)["tech_label"] == "Neutral")
+    below = rate(36.9, 36.9, neutral)
+    expect("Neutral becomes Weak / Downtrend below 37",
+           below["fund_label"] == "Weak" and below["tech_label"] == "Downtrend")
+    expect("Weak stays Weak at 42.9", rate(42.9, 42.9, weak_down)["fund_label"] == "Weak")
+    expect("Weak becomes Neutral at 43", rate(43, 43, weak_down)["fund_label"] == "Neutral")
+    expect("Strong can fall straight to Weak", rate(30, 30, strong_up)["action"] == "Sell")
+    expect("Weak can jump straight to Strong", rate(70, 70, weak_down)["action"] == "Buy")
+
+    # 3. A veto cap bypasses the band (59 is above the 57 exit, so without this a
+    #    name already Strong would stay Strong under a Hold-ceiling gate).
+    expect("cap 59 pulls a Strong name to Neutral",
+           rate(80, 59, strong_up, cap=59)["fund_label"] == "Neutral")
+    expect("cap 39 pulls a Neutral name to Weak",
+           rate(80, 39, neutral, cap=39)["fund_label"] == "Weak")
+    expect("a cap above the label changes nothing", rate(80, 30, None, cap=59)["fund_label"] == "Weak")
+    expect("a cap leaves the technical label alone",
+           rate(80, 59, strong_up, cap=59)["tech_label"] == "Uptrend")
+
+    # 4. A missing score abstains instead of reading as neutral.
+    expect("no fundamentals -> No Data, technical label kept",
+           rate(70, None) == {"fund_label": None, "tech_label": "Uptrend", "action": "No Data"})
+    expect("no technicals -> No Data",
+           rate(None, 70) == {"fund_label": "Strong", "tech_label": None, "action": "No Data"})
+    expect("neither score -> No Data", rate(None, None)["action"] == "No Data")
+
+    # 5. reverses_if names the nearest edge that changes the tag.
+    def why(tech, fund, prev=None, cap=None):
+        return ratings.reverses_if(tech, fund, rate(tech, fund, prev, cap), cap)
+    expect("Accumulate: technical back to 63 gives Buy",
+           why(52, 70, strong_up) == "technical score 63 or above (now 52) -> Buy")
+    expect("Sell: technical back to 43 gives Avoid (a tie goes to the technical axis)",
+           why(30, 30) == "technical score 43 or above (now 30) -> Avoid")
+    expect("Hold skips edges that would keep the same tag",
+           why(50, 50) == "technical score below 37 (now 50) -> Don't add")
+    expect("a veto removes the fundamental axis", why(70, 59, cap=59) is None)
+    expect("No Data has nothing to reverse", why(70, None) is None)
+
+    # 6. Drivers cite raw fields and drop what is missing.
+    expect("tech drivers cite the three score terms",
+           ratings.tech_drivers({"pos52": 55.0, "slope150": -0.4, "ppo": -0.4})
+           == ["52-week range position 55%", "150-day avg falling 0.4%/21d", "PPO -0.4%"])
+    expect("tech drivers skip missing terms", ratings.tech_drivers({"ppo": 1.26}) == ["PPO +1.3%"])
+    sub = {"valuation": 40, "profitability": 80, "growth": 55, "health": 100, "health_known": 8}
+    fund = {"grossMargins": 0.61, "operatingMargins": 0.38, "returnOnEquity": 0.24, "trailingPE": 31.2}
+    expect("fund drivers: the three sub-scores furthest from 50, each citing its inputs",
+           ratings.fund_drivers(fund, sub, 8, None)
+           == ["health strong (8/8)", "profitability strong (margins 61%/38%, ROE 24%)",
+               "valuation mixed (P/E 31.2)"])
+    expect("a firing gate comes first and counts toward the limit of 3",
+           ratings.fund_drivers({}, {"valuation": 10, "growth": 50}, None, "cash_burn")
+           == ["cash-burn gate", "valuation weak", "growth mixed"])
+
+    # 7. Every stored ticker rates without raising, and abstains only where a score is missing.
+    tickers = json.load(open(DATA))["tickers"]
+    exempt = analyzer.load_config().get("ocf_veto_exempt", [])
+    rated = abstained = 0
+    for tkr, v in tickers.items():
+        tech = (v or {}).get("technicals") or {}
+        fund = tech.get("fundamentals") or {}
+        _, cap = analyzer.veto_gates(fund, tech.get("financialHistory"), tkr, exempt)
+        got = ratings.rate(tech.get("tech_score"), tech.get("fund_score"), cap, {})
+        lacks = tech.get("tech_score") is None or tech.get("fund_score") is None
+        abstained += lacks
+        rated += not lacks
+        expect(f"{tkr}: action is No Data exactly when a score is missing; got {got}",
+               (got["action"] == "No Data") == lacks)
+        ratings.tech_drivers(tech)
+        ratings.fund_drivers(fund, tech.get("fund_subscores"), tech.get("quality_score"),
+                             tech.get("veto_reason"))
+
+    # 8. merge_fundamentals wires it up: fields stored, last run's labels honoured, blend untouched.
+    fund_data = {"fundamentals": {"sector": "Technology", "trailingPE": 25.0, "priceToSales": 5.0,
+                                  "pegRatio": 1.2, "priceToBook": 4.0, "grossMargins": 0.6,
+                                  "operatingMargins": 0.3, "returnOnEquity": 0.25, "revenueGrowth": 0.2,
+                                  "earningsGrowth": 0.2, "currentYearGrowth": 0.2,
+                                  "operatingCashflow": 1e9, "totalRevenue": 5e9, "totalDebt": 1e8,
+                                  "totalCash": 5e8},
+                 "price_target": {}, "earnings": {}}
+
+    def merged(score, prev=None):
+        t = {"score": score, "price": 100.0, "pos52": 55.0, "slope150": -0.4, "ppo": -0.4,
+             "score_reasons": []}
+        return analyzer.merge_fundamentals(t, fund_data, None, "T", [], prev=prev)
+
+    m = merged(41.0)
+    expect("merge: stores labels, action, drivers, reverses_if and the sub-scores",
+           all(k in m for k in ("fund_label", "tech_label", "action", "drivers", "reverses_if",
+                                "fund_subscores"))
+           and m["action"] == ratings.rate(m["tech_score"], m["fund_score"], None, {})["action"]
+           and m["drivers"]["tech"] == ["52-week range position 55%", "150-day avg falling 0.4%/21d",
+                                        "PPO -0.4%"]
+           and m["fund_subscores"]["profitability"] is not None)
+    expect("merge: with no history a 41 reads Neutral technically", m["tech_label"] == "Neutral")
+    expect("merge: last run's Downtrend holds a 41 (it needs 43 to leave)",
+           merged(41.0, {"fund_label": "Strong", "tech_label": "Downtrend"})["tech_label"] == "Downtrend")
+    expect("merge: the blended score and recommendation are untouched",
+           m["combined_score"] is not None
+           and m["recommendation"] in ("Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"))
+
+    # 9. A fundamentals gap must not erase the last real rating or its stickiness.
+    mid = dict(fund_data["fundamentals"], trailingPE=15.0, priceToSales=3.0, revenueGrowth=0.05,
+               earningsGrowth=0.05, currentYearGrowth=0.05, grossMargins=0.2, operatingMargins=0.05,
+               returnOnEquity=0.05)
+    no_fund = {"fundamentals": {}, "price_target": {}, "earnings": {}}
+
+    def merged_with(data, prev=None):
+        t = {"score": 52.0, "price": 100.0, "pos52": 55.0, "slope150": -0.4, "ppo": -0.4,
+             "score_reasons": []}
+        return analyzer.merge_fundamentals(t, data, None, "T", [], prev=prev)
+
+    held = {"fund_label": "Neutral", "tech_label": "Neutral", "action": "Hold"}
+    gap = merged_with(no_fund, held)
+    expect(f"gap run: No Data, and the last real rating is remembered; got {gap.get('action')}, "
+           f"{gap.get('last_action')}, {gap.get('last_fund_label')}",
+           gap["action"] == "No Data" and gap.get("last_action") == "Hold"
+           and gap.get("last_fund_label") == "Neutral")
+    gap2 = merged_with(no_fund, gap)
+    expect("a second gap run still remembers the same rating",
+           gap2.get("last_action") == "Hold" and gap2.get("last_fund_label") == "Neutral")
+    back = merged_with(dict(fund_data, fundamentals=mid), gap2)
+    expect(f"returning at fund score {back['fund_score']} (60-63) keeps the pre-gap Neutral "
+           f"instead of re-reading Strong from the plain edge",
+           60 <= back["fund_score"] < 63 and back["fund_label"] == "Neutral"
+           and "last_action" not in back and "last_fund_label" not in back)
+
+    if failures:
+        print(f"FAIL verify-ratings: {len(failures)} check(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(f"verify-ratings PASS: nine cells, sticky 3-point labels, veto override, driver lines; "
+          f"{rated} stored tickers rated, {abstained} abstained.")
+    return 0
+
+
 if __name__ == "__main__":
     if "--verify-outage" in sys.argv:
         sys.exit(verify_outage())
@@ -563,6 +960,10 @@ if __name__ == "__main__":
         sys.exit(verify_workflow())
     if "--self-test" in sys.argv:
         sys.exit(self_test())
+    if "--verify-ratings" in sys.argv:
+        sys.exit(verify_ratings())
+    if "--verify-messages" in sys.argv or "--update-golden" in sys.argv:
+        sys.exit(verify_messages(update="--update-golden" in sys.argv))
     if "--verify-monitor" in sys.argv:
         sys.exit(verify_monitor())
     changed, flips, _ = check()
