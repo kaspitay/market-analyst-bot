@@ -6,6 +6,7 @@ import subprocess
 import time
 import requests
 import ratings
+import messages
 from datetime import date, datetime, timedelta
 
 
@@ -109,15 +110,6 @@ def fetch_company_news(ticker, api_key):
     resp.raise_for_status()
     # Sort newest-first ourselves rather than relying on Finnhub's ordering.
     articles = sorted(resp.json(), key=lambda a: a.get("datetime") or 0, reverse=True)[:3]
-    return [{"headline": a["headline"], "summary": a["summary"]} for a in articles]
-
-
-def fetch_market_news(api_key):
-    url = "https://finnhub.io/api/v1/news"
-    params = {"category": "general", "token": api_key}
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
-    articles = resp.json()[:10]
     return [{"headline": a["headline"], "summary": a["summary"]} for a in articles]
 
 
@@ -1082,300 +1074,18 @@ def outage_line(alert):
     return f"<b>DATA SOURCE</b> {alert['detail']}."
 
 
-def build_prompt(portfolio_news, watchlist_news, market_news, indicators, earnings, portfolio, watchlist, technicals, briefing_type, weights, TAG, expo, alerts=(), full=False):
-    today_str = date.today().strftime("%B %d, %Y")
-
-    if briefing_type == "pre-market":
-        header = f"PRE-MARKET BRIEFING \u2014 {today_str}"
-        time_context = "for today's trading session"
-    else:
-        header = f"PRE-CLOSE BRIEFING \u2014 {today_str}"
-        time_context = "as we approach market close"
-
-    # --- MARKET CONTEXT ---
-    market_text = "## Market Indicators\n"
-    fg = indicators.get("fear_greed")
-    if fg:
-        market_text += f"- Fear & Greed: {fg['now']} (prev: {fg['previous_close']}, 1w ago: {fg['one_week_ago']}, 1m ago: {fg['one_month_ago']})\n"
-    indices = indicators.get("indices", {})
-    for name, key in [("S&P 500", "sp500"), ("Dow Jones", "dow"), ("NASDAQ", "nasdaq")]:
-        idx = indices.get(key)
-        if idx:
-            market_text += f"- {name}: ${idx['price']:,.2f} ({idx['changesPercentage']:+.2f}%)\n"
-    vix = indicators.get("vix")
-    if vix:
-        market_text += f"- VIX: {vix['price']} ({vix['pct']:+.2f}%)\n"
-
-    # --- EARNINGS ---
-    earn_text = ""
-    if earnings:
-        earn_text = "\n## Upcoming Earnings\n"
-        for e in earnings:
-            eps = f"EPS est: ${e['eps_est']:.2f}" if e["eps_est"] is not None else "EPS est: N/A"
-            held = "PORTFOLIO" if e["symbol"] in portfolio else "WATCHLIST"
-            alloc = f" ({weights.get(e['symbol'], 0)}%)" if e["symbol"] in portfolio else ""
-            earn_text += f"- [{held}] {e['symbol']}{alloc}: {e['date']} ({e['hour']}) \u2014 {eps}\n"
-
-    # --- ECONOMIC CALENDAR ---
-    cal_text = ""
-    cal = indicators.get("calendar", [])
-    if cal:
-        cal_text = "\n## Economic Calendar\n"
-        for e in cal[:5]:
-            cal_text += f"- {e['date']}: {e['title']} - {e.get('description', '')}\n"
-
-    # --- PRE-COMPUTE ALGORITHM DECISIONS ---
-    buys, holds, sells, no_data = [], [], [], []
-    for ticker, tech in technicals.items():
-        if not tech or ticker not in portfolio:
-            continue
-        rec = tech.get("recommendation", "Hold")
-        if rec == "No Data":
-            # Abstained on fundamentals (Task 2): combined_score/fund_score are
-            # None with the KEY PRESENT, so tech.get(key, default) silently passes
-            # the None through instead of falling back. Never bucket this as a
-            # normal Hold, and never let a literal "combined=None" reach the prompt.
-            no_data.append(ticker)
-            continue
-        alloc = weights.get(ticker, 0)
-        combined = tech.get("combined_score", tech.get("score", 50))
-        tech_sc = tech.get("tech_score", tech.get("score", 50))
-        fund_sc = tech.get("fund_score", 50)
-        rsi = tech.get("rsi")
-        signals = tech.get("signals", [])
-        pt_mean = tech.get("target_mean")
-        upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
-        upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
-        has_earnings = any(e["symbol"] == ticker for e in earnings)
-        fund = tech.get("fundamentals") or {}
-        pe_str = f"P/E={fund['trailingPE']:.1f}" if fund.get("trailingPE") else "P/E=N/A"
-        fpe_str = f"FwdP/E={fund['forwardPE']:.1f}" if fund.get("forwardPE") else ""
-
-        entry = f"{ticker} ({alloc}%): combined={combined} (tech={tech_sc}, fund={fund_sc}), ${tech['price']:.2f}, RSI={rsi}, {pe_str}, {fpe_str}, {upside_str}, signals=[{', '.join(signals[:4])}]"
-        if has_earnings:
-            entry += " *** EARNINGS SOON ***"
-
-        if rec in ("Strong Buy", "Buy"):
-            buys.append((combined, entry))
-        elif rec in ("Strong Sell", "Sell"):
-            sells.append((combined, entry))
-        else:
-            holds.append((combined, entry))
-
-    # Watchlist picks
-    wl_picks = []
-    for ticker, tech in technicals.items():
-        if not tech or ticker in portfolio:
-            continue
-        rec = tech.get("recommendation", "Hold")
-        if rec == "No Data":
-            continue  # same None-masking risk as the portfolio loop above
-        combined = tech.get("combined_score", tech.get("score", 50))
-        rsi = tech.get("rsi")
-        pt_mean = tech.get("target_mean")
-        upside = round((pt_mean - tech["price"]) / tech["price"] * 100, 1) if pt_mean and tech.get("price") else None
-        upside_str = f"target ${pt_mean:.0f} ({upside:+.1f}%)" if upside is not None else "no target"
-        if rec in ("Strong Buy", "Buy") or (rsi and rsi < 35):
-            theme_note = ""
-            theme = TAG.get(ticker)
-            if theme and rec in ("Strong Buy", "Buy") and expo.get(theme, 0) >= 25:
-                theme_note = f" (adds to {theme}, already {expo[theme]:.1f}%)"
-            wl_picks.append((combined, f"{ticker}: combined={combined}, ${tech['price']:.2f}, RSI={rsi}, {upside_str}, signals=[{', '.join(tech.get('signals', [])[:3])}]{theme_note}"))
-
-    # combined is None for a ticker that abstained (no fundamentals), so sort it
-    # as 0 rather than letting one failed fetch crash the whole briefing.
-    buys.sort(key=lambda x: -(x[0] or 0))
-    sells.sort(key=lambda x: x[0] or 0)
-    holds.sort(key=lambda x: -(x[0] or 0))
-    wl_picks.sort(key=lambda x: -(x[0] or 0))
-
-    # --- STANDING FACTS (both modes) ---
-    theme_str = ", ".join(f"{n} {v:.1f}%" for n, v in sorted(expo.items(), key=lambda x: -x[1]))
-    standing = "\n## Standing facts (context only — do not report these as news)\n"
-    standing += f"- {len(portfolio)} positions. Theme exposure: {theme_str}\n"
-    if no_data:
-        standing += f"- {len(no_data)} ticker(s) have no fundamentals data (abstained): {', '.join(sorted(no_data))}\n"
-    if earnings:
-        standing += "- Next earnings: " + ", ".join(f"{e['symbol']} {e['date']}" for e in earnings[:3]) + "\n"
-    else:
-        standing += "- Next earnings: none in the next 14 days\n"
-    for _, entry in wl_picks[:3]:
-        standing += f"- Watchlist entry signal: {entry}\n"
-
-    # --- EXCEPTIONS (both modes) ---
-    # The full Sunday briefing carries these too: alerts_pending is cleared after
-    # any successful send, so an exception left out of the message it was cleared
-    # by is lost for good — and trigger 5 is keyed on (ticker, date), so a dropped
-    # earnings alert can never fire again for that date.
-    exc_text = "\n## EXCEPTIONS — what changed since the last run\n"
-    for a in alerts:
-        exc_text += f"- {a['ticker']} [{a['trigger']}]: {a['detail']}\n"
-    if not alerts:
-        exc_text += "- None\n"
-
-    # --- MONITOR MODE: exceptions only ---
-    if not full:
-        exc_news = ""
-        for ticker in dict.fromkeys(a["ticker"] for a in alerts):   # alert order, deduped
-            articles = portfolio_news.get(ticker) or watchlist_news.get(ticker) or []
-            if articles:
-                exc_news += f"\n### {ticker} news\n"
-                for a in articles[:2]:
-                    exc_news += f"- {a['headline']}: {a['summary']}\n"
-        if exc_news:
-            exc_news = "\n## News for the tickers above\n" + exc_news
-
-        return f"""You are a market monitor for a long-term investor. Report ONLY what changed.
-
-FORMAT RULES (strict):
-- Under 1200 characters total. Shorter is better.
-- ONLY use <b> and <i> HTML tags. No other tags.
-- One • bullet per exception, one line each, in the order given below.
-
-Write exactly this:
-
-<b>\U0001f4e1 MONITOR — {today_str}</b>
-
-One bullet per exception: what changed, then one short clause of why, but only if
-the news or market context below actually explains it. Say nothing about any ticker
-that is not in the exception list. Do not restate the portfolio, do not list
-indicators, do not add sections, do not give advice on unchanged positions.
-
-Then one final line beginning "Standing:" with the position count, the largest theme
-exposure, and the next earnings date.
-
-DATA:
-{exc_text}{standing}
-{market_text}{exc_news}"""
-
-    algo_text = "\n## ALGORITHM DECISIONS (pre-computed)\n"
-    algo_text += "\n### BUY/ADD (top by score):\n"
-    for _, entry in buys[:3]:
-        algo_text += f"- {entry}\n"
-    if not buys:
-        algo_text += "- None\n"
-    algo_text += "\n### HOLD:\n"
-    for _, entry in holds[:5]:
-        algo_text += f"- {entry}\n"
-    algo_text += "\n### SELL/REDUCE (weakest by score):\n"
-    for _, entry in sells[:3]:
-        algo_text += f"- {entry}\n"
-    if not sells:
-        algo_text += "- None\n"
-    algo_text += "\n### WATCHLIST ENTRY SIGNALS:\n"
-    for _, entry in wl_picks[:3]:
-        algo_text += f"- {entry}\n"
-    if not wl_picks:
-        algo_text += "- None\n"
-
-    # --- FULL TECHNICAL DATA ---
-    tech_text = "\n## Technical Indicators\n"
-    for ticker, tech in technicals.items():
-        if tech:
-            rsi_str = f"RSI={tech['rsi']}" if tech.get("rsi") else "RSI=N/A"
-            sma50_str = f"SMA50=${tech['sma50']}" if tech.get("sma50") else "SMA50=N/A"
-            sma200_str = f"SMA200=${tech['sma200']}" if tech.get("sma200") else "SMA200=N/A"
-            signals = ", ".join(tech.get("signals", [])) if tech.get("signals") else "no signals"
-            alloc = f" ({weights.get(ticker, 0)}%)" if ticker in portfolio else " [WL]"
-            pt_mean = tech.get("target_mean")
-            pt_str = f" | target=${pt_mean:.0f}" if pt_mean else ""
-            tech_text += f"- {ticker}{alloc}: ${tech['price']:.2f} ({tech.get('change_pct', 0):+.2f}%) | {rsi_str} | {sma50_str} | {sma200_str} | score={tech.get('score', 'N/A')}{pt_str} | {signals}\n"
-
-    # --- CONCENTRATION RISKS ---
-    risk_text = "\n## Concentration Risks\n"
-    for ticker, alloc in sorted(weights.items(), key=lambda x: -x[1]):
-        if alloc > 10:
-            risk_text += f"- {ticker}: {alloc}% of portfolio\n"
-
-    # --- NEWS (with full summaries) ---
-    news_text = "\n## General Market News\n"
-    for article in market_news[:5]:
-        news_text += f"- {article['headline']}: {article['summary']}\n"
-
-    news_text += "\n## Portfolio Holdings News\n"
-    for ticker, articles in portfolio_news.items():
-        if articles:
-            alloc = weights.get(ticker, 0)
-            news_text += f"\n### {ticker} ({alloc}% of portfolio)\n"
-            for a in articles:
-                news_text += f"- {a['headline']}: {a['summary']}\n"
-
-    if any(articles for articles in watchlist_news.values()):
-        news_text += "\n## Watchlist News\n"
-        for ticker, articles in watchlist_news.items():
-            if articles:
-                news_text += f"\n### {ticker}\n"
-                for a in articles:
-                    news_text += f"- {a['headline']}: {a['summary']}\n"
-
-    return f"""You are a stock market analyst advising a long-term investor.
-Produce a Telegram message briefing {time_context} using ALL the data below.
-
-YOUR ROLE: Our scoring algorithm (0-100, Tech 40% + Fundamental 60%) has pre-computed decisions: Strong Buy (72+), Buy (60-71), Hold (40-59), Sell (28-39), Strong Sell (<28). Fundamentals include sector-relative valuation and a 0-8 Piotroski F-score, and hard veto gates that cap a score at 39 (cash burn) or 59 (leverage, margin erosion). Use these as a starting point, but make your OWN analysis by combining algorithm scores + news + technicals + upcoming events. If you disagree with the algorithm, say so and explain why.
-
-FORMAT RULES (strict):
-- Keep under 3900 characters total.
-- ONLY use <b> and <i> HTML tags. No <u>, no <s>, no other tags.
-- Use emojis liberally to make it scannable and visually appealing.
-- Use \u2022 bullets for lists, keep each bullet to one line.
-
-Structure your message EXACTLY in this order:
-
-<b>\U0001f4ca {header}</b>
-
-<b>\U0001f514 WHAT CHANGED</b>
-One • bullet per entry in the EXCEPTIONS list below, all of them, in the order given. This is the only place these are reported, so do not drop any. Write "• Nothing changed since the last run." if the list says None.
-
-<b>\U0001f3af MARKET DASHBOARD</b>
-Show indices with price and arrows (\u2b06\ufe0f/\u2b07\ufe0f), VIX with arrow.
-Fear & Greed score with emoji (\U0001f631<25, \U0001f628<45, \U0001f610<55, \U0001f60e<75, \U0001f929 75+).
-Include trend vs previous close and 1 month ago with arrows.
-
-<b>\U0001f4c5 EARNINGS ALERT</b>
-List upcoming earnings from data. Use \u26a0\ufe0f for this week, \U0001f4c6 for next week. Show [PORTFOLIO] or [WATCHLIST] and allocation %.
-
-<b>\U0001f4b0 ECONOMIC CALENDAR</b>
-Key upcoming economic events with date and descriptive emoji. One line each.
-
-<b>\U0001f4bc PORTFOLIO PULSE</b>
-For each portfolio ticker with meaningful news (sorted by allocation):
-Colored dot (\U0001f7e2 positive / \U0001f534 negative / \u26aa neutral price action), then <b>TICKER (alloc%)</b>: one-line news summary. End with impact (\U0001f7e2 Bullish / \U0001f534 Bearish / \u26aa Neutral Impact).
-
-<b>\U0001f440 WATCHLIST RADAR</b>
-Max 3 watchlist tickers with notable news or entry signals. For each: \U0001f7e1 <b>TICKER</b>: 2-3 sentence analysis including technicals, news catalyst, and actionable guidance.
-
-<b>\U0001f4a1 RECOMMENDATIONS</b>
-Based on ALL data (algorithm scores + news + technicals + sentiment), give your recommendations:
-\U0001f7e2 <b>BUY/ADD</b>: Which tickers to buy/add and WHY. Include price target upside if available. Add \u2705 checkmark.
-\U0001f7e1 <b>HOLD</b>: Which to hold and WHY. Group similar tickers together.
-\U0001f534 <b>SELL/REDUCE</b>: Which to sell/trim and WHY. Add \u274c marker.
-Include watchlist tickers in BUY if there's a good entry signal.
-\u26a0\ufe0f Add an inline warning for concentration risk (any position >10%).
-Skip empty categories.
-
-<b>\u26a0\ufe0f RISK ALERTS</b>
-Flag single-position concentration (>10%) and any theme exposure at or above 25%.
-
-<b>\U0001f30d MARKET OUTLOOK</b>
-2-3 sentences on overall sentiment and what to watch {time_context}.
-
-Do NOT suggest stocks outside the portfolio/watchlist.
-
-DATA:
-{exc_text}{standing}{market_text}{earn_text}{cal_text}{algo_text}{tech_text}{risk_text}{news_text}"""
-
-
-def analyze(prompt):
-    api_key = os.environ["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    for attempt in range(3):
-        resp = requests.post(url, json=payload, timeout=60)
-        if resp.status_code == 503 and attempt < 2:
-            time.sleep(5)
-            continue
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+def briefing_text(alerts, full, technicals, weights, portfolio, watchlist, indicators,
+                  earnings, expo, today):
+    """The whole Telegram message for a run. Built from templates: a model rewrote 56
+    exceptions as 55 lines and 27 positions as 58."""
+    if [a["trigger"] for a in alerts] == ["FUNDAMENTALS_OUTAGE"] and not full:
+        return outage_line(alerts[0])
+    if full:
+        return messages.sunday_digest(alerts, technicals, weights, list(portfolio), list(watchlist),
+                                      indicators, earnings, expo, today, EXPO_LIMIT)
+    if alerts:
+        return messages.alerts_message(alerts, technicals, weights, today)
+    return quiet_line(portfolio, expo, earnings)
 
 
 def sanitize_telegram_html(text):
@@ -1547,13 +1257,7 @@ def main():
     ocf_veto_exempt = config.get("ocf_veto_exempt", [])
     all_tickers = list(portfolio.keys()) + watchlist
 
-    # Fetch market data. Market news only feeds the briefing prompt, so a Finnhub
-    # outage must not abort the run before the dashboard data is fetched.
-    try:
-        market_news = fetch_market_news(finnhub_key)
-    except Exception as e:
-        print(f"Warning: failed to fetch market news: {e}")
-        market_news = []
+    # Fetch market data.
     fg_data = fetch_fear_greed_data()
     vix = fetch_vix()
 
@@ -1646,8 +1350,8 @@ def main():
         print(f"EXCEPTION {a['ticker']} [{a['trigger']}]: {a['detail']}")
     print(f"Exceptions this run: {len(alerts)}")
 
-    # Save dashboard data before the AI/Telegram legs: all market data is already
-    # fetched here, and the dashboard must not go stale just because Gemini or
+    # Save dashboard data before the Telegram leg: all market data is already
+    # fetched here, and the dashboard must not go stale just because
     # Telegram is down. alerts_pending goes in full and is cleared only after a
     # successful send, so a failed send re-reports rather than losing the alert.
     save_market_data(portfolio, watchlist, technicals, portfolio_news, watchlist_news,
@@ -1658,17 +1362,8 @@ def main():
     # already dead for 30 days without anyone noticing.
     full = briefing_type == "pre-market" and today.weekday() == 6
 
-    if [a["trigger"] for a in alerts] == ["FUNDAMENTALS_OUTAGE"] and not full:
-        analysis = outage_line(alerts[0])
-    elif alerts or full:
-        prompt = build_prompt(
-            portfolio_news, watchlist_news, market_news,
-            indicators, earnings, portfolio, watchlist, technicals, briefing_type,
-            weights, TAG, expo, alerts, full,
-        )
-        analysis = analyze(prompt)
-    else:
-        analysis = quiet_line(portfolio, expo, earnings)
+    analysis = briefing_text(alerts, full, technicals, weights, portfolio, watchlist,
+                             indicators, earnings, expo, today)
     print(f"Briefing length: {len(analysis)} chars ({'full' if full else 'monitor'})")
 
     send_telegram(analysis, bot_token, chat_id)

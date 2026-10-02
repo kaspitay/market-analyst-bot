@@ -361,6 +361,10 @@ def verify_workflow():
         failures.append("run type is derived from the clock (`date -u +%H`); "
                         "scheduled runs start hours late, so the label is wrong")
 
+    if "GEMINI" in text:
+        failures.append("the workflow still passes GEMINI_API_KEY; the Telegram text is built "
+                        "from templates and no step calls a model")
+
     m = re.search(r'cron:\s*"(\d+)\s+(\d+)\s+\*\s+\*\s+\*"', text)
     if not m:
         failures.append("could not find a daily `cron: \"M H * * *\"` line")
@@ -720,6 +724,20 @@ def verify_messages(update=False):
            len(tight) <= full_len - 1)
     expect("over budget: the watchlist collapses to counts, the portfolio and changes survive",
            "Buy 60" in tight and "W059" not in tight and "PORTFOLIO (4)" in tight and "CHANGES" in tight)
+
+    # 5. Which message a run sends. The model is out of the loop entirely.
+    def bt(alerts_, full):
+        return analyzer.briefing_text(alerts_, full, T, W, {"NBIS": {}, "IREN": {}}, ["INTU"],
+                                      ind, earn, expo, today)
+    outage = [{"ticker": "YAHOO", "trigger": "FUNDAMENTALS_OUTAGE",
+               "detail": "fundamentals unavailable for 56/56 tickers, kept last scores for 56"}]
+    expect("outage-only run sends the one-line data-source message",
+           bt(outage, False).startswith("<b>DATA SOURCE</b>") and "\n" not in bt(outage, False))
+    expect("Sunday sends the digest even when only an outage fired",
+           bt(outage, True).startswith("<b>WEEKLY BOOK</b>"))
+    expect("a normal day with alerts sends the monitor message",
+           bt(alerts[:1], False).startswith("<b>MONITOR</b>"))
+    expect("a quiet day sends the quiet line", bt([], False).startswith("Nothing changed."))
 
     if failures:
         print(f"FAIL verify-messages: {len(failures)} check(s) failed:")
