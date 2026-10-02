@@ -85,8 +85,9 @@ the one nearest the current score, the tag it lands on, and today's value. Examp
 ## Data shape (`market-data.json`, per ticker `technicals`)
 
 Added: `fund_label`, `tech_label`, `action`, `drivers` (`{fund: [...], tech: [...]}`), `reverses_if`,
-`slope150`. `slope150` is currently only inside a reason string; it is stored so the template cites a
-number. `compute_fundamental_score` also returns its four sub-scores as a dict; its two callers
+`slope150`, `fund_subscores`. `slope150` is currently only inside a reason string; it is stored so the
+template cites a number. `compute_fundamental_score` also returns its four sub-scores as a dict (stored as
+`fund_subscores`, plus `health_known`, the number of measurable F-score signals); its two callers
 (`merge_fundamentals`, `check_scores.replay`) are updated. Nothing is removed.
 
 Computed after `merge_fundamentals`, in `main()`, with `prev` read from `prev_data` (the same state
@@ -102,20 +103,24 @@ silently, so the first run after merge fires no `ACTION_CHANGE`. All other trigg
 
 ## Telegram (`messages.py`, templates only)
 
-Dynamic text passes through `html.escape`; headers may use `<b>`. A missing field drops its clause and
-is never replaced.
+Templates emit plain text with `<b>` headers and do not `html.escape`: `send_telegram` already escapes
+`& < >`, so escaping here would double-escape. They avoid `<` and `>` in their own text so the dashboard,
+which renders briefings as innerHTML, shows them intact. A missing field drops its clause and is never
+replaced.
 
 Action change:
 ```
-NBIS  Buy -> Starter  (18.1% of book)
-why: technical Uptrend -> Downtrend: 52-week range position 31%, 150-day avg falling 4.2%/21d, PPO -1.2%. Fundamentals Strong: health 8/8.
-reverses if: technical score above 63 (now 58) -> Buy
+NBIS  Buy -> Accumulate  (18.1% of book)
+why: technical Uptrend -> Neutral: 52-week range position 55%, 150-day avg falling 0.4%/21d, PPO -0.4%; fundamentals Strong: health strong (8/8), profitability strong (margins 61%/38%, ROE 24%), valuation mixed (P/E 31.2)
+reverses if: technical score 63 or above (now 52) -> Buy
 ```
+The alert dict stored in `alerts_pending` carries `from`, `to`, `from_fund` and `from_tech`, so a replayed
+alert still reads correctly.
 Every other trigger renders `{ticker}  {TRIGGER}: {detail}` using the existing code-built `detail`.
 Systemic outage stays the single `FUNDAMENTALS_OUTAGE` line; isolated gaps collapse to one
 `DATA_GAP: A, B, C` line. The quiet-day line is unchanged.
 
-**Sunday digest** (≤ 4,096 characters), in this priority order: changes since the last run; the portfolio
+**Sunday digest** (≤ 4,096 characters; the code budget is 4,000, `send_telegram`'s own split point), in this priority order: changes since the last run; the portfolio
 grouped by tag with weights; the watchlist grouped by tag (tickers only); market line (S&P, Nasdaq, VIX,
 Fear & Greed from `indicators`); earnings in the next 14 days; next three calendar events; theme
 exposure. If over budget, watchlist groups collapse to counts first, then the calendar goes.
